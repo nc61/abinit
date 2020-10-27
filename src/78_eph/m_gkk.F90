@@ -127,8 +127,185 @@ subroutine eph_gkq(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_k,eb
  logical,allocatable :: bks_mask(:,:,:),bks_mask_kq(:,:,:),keep_ur(:,:,:),keep_ur_kq(:,:,:)
  type(pawcprj_type),allocatable  :: cwaveprj0(:,:) !natom,nspinor*usecprj)
 
- print *, "Made it into eph_gkq !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 
+ ! Variables I added
+ integer :: sband, fband
+
+ ! PAW is not implemented yet
+ if (psps%usepaw == 1) then
+   MSG_ERROR("PAW not implemented")
+   ABI_UNUSED((/pawang%nsym, pawrad(1)%mesh_size/))
+ end if
+
+ my_rank = xmpi_comm_rank(comm); nproc = xmpi_comm_size(comm); i_am_master = my_rank == master
+
+ ! Copy important dimensions
+ natom = cryst%natom
+ natom3 = 3 * natom
+ nsppol = ebands_k%nsppol
+ nspinor = ebands_k%nspinor
+ nspden = dtset%nspden
+ nkpt = ebands_k%nkpt
+ mband = ebands_k%mband
+ nkpt_kq = ebands_kq%nkpt
+ mband_kq = ebands_kq%mband
+ ecut = dtset%ecut
+ !write(std_out, *)"ebands dims (b, k, s): ", ebands_k%mband, ebands_k%nkpt, ebands_k%nsppol
+ !write(std_out, *)"ebands_kq dims (b, k, s): ", ebands_kq%mband, ebands_kq%nkpt, ebands_kq%nsppol
+
+ ! Read in FFT information. Immediately needed for reading dvdb
+ nfftf = product(ngfftf(1:3)); mgfftf = maxval(ngfftf(1:3))
+ nfft = product(ngfft(1:3)) ; mgfft = maxval(ngfft(1:3))
+ n1=ngfft(1); n2=ngfft(2); n3=ngfft(3)
+ n4=ngfft(4); n5=ngfft(5); n6=ngfft(6)
+
+ ! Open the DVDB file
+ call dvdb%open_read(ngfftf, xmpi_comm_self)
+
+ ! Hard code q point and choose ik = 1
+ ! ebands_kq doesn't seem to have kptns values!
+ ikq = 2
+ kk = ebands_k%kptns(:,1)
+ kq = ebands_k%kptns(:,ikq)
+ qpt = kq - kk
+ !call findqg0(ikq, g0_k, kq, nkpt_kq, ebands_kq%kptns, [1,1,1])
+
+ ! Find the appropriate value of mpw. Not used til later
+ call find_mpw(mpw_k, ebands_k%kptns(:,:), nsppol, nkpt, cryst%gmet,ecut,comm)
+ call find_mpw(mpw_kq, ebands_kq%kptns(:,:), nsppol, nkpt_kq, cryst%gmet,ecut,comm)
+
+ print *, "mpw_k"
+ print *, mpw_k
+ print *, "mpw_kq"
+ print *, mpw_kq
+!mpw = max(mpw_k, mpw_kq)
+ 
+  ! Copy u_k(G)
+!istwf_k = wfd_k%istwfk(ik); npw_k = wfd_k%npwarr(ik)
+!ABI_CHECK(mpw >= npw_k, "mpw < npw_k")
+!!kg_k(:,1:npw_k) = wfd_k%kdata(ik)%kg_k
+!!do ib2=1,mband
+!!  call wfd_k%copy_cg(ib2, ik, spin, kets(1,1,ib2))
+!!end do
+
+! ! Copy u_kq(G)
+! istwf_kq = wfd_kq%istwfk(ikq); npw_kq = wfd_kq%npwarr(ikq)
+! ABI_CHECK(mpw >= npw_kq, "mpw < npw_kq")
+!!kg_kq(:,1:npw_kq) = wfd_kq%kdata(ikq)%kg_k
+!!do ib1=1,mband_kq
+!!  call wfd_kq%copy_cg(ib1, ikq, spin, bras(1,1,ib1))
+!!end do
+
+ print *, "kq point"
+ print *, kq
+ print *, "k point"
+ print *, kk
+
+ print *, "Q point"
+ print *, qpt
+ sband = 1
+ fband = 1
+ print *, "Interpolate flag"
+ print *, dtset%eph_use_ftinterp
+
+ ! Interpolate the q mesh to find the q point we need (copied from eph_gkk). This v1scf is only valid
+ ! for the given k point!
+ interpolated = 0
+ if (dtset%eph_use_ftinterp /= 0) then
+   MSG_WARNING(sjoin("Enforcing FT interpolation for q-point", ktoa(qpt)))
+   comm_rpt = xmpi_comm_self
+   call dvdb%ftinterp_setup(dtset%ddb_ngqpt, 1, dtset%ddb_shiftq, nfftf, ngfftf, comm_rpt)
+   cplex = 2
+   ABI_MALLOC(v1scf, (cplex, nfftf, nspden, dvdb%my_npert))
+   call dvdb%ftinterp_qpt(qpt, nfftf, ngfftf, v1scf, dvdb%comm_rpt)
+   interpolated = 1
+ else
+   ! Find the index of the q-point in the DVDB.
+   db_iqpt = dvdb%findq(qpt)
+   if (db_iqpt /= -1) then
+     if (dtset%prtvol > 0) call wrtout(std_out, sjoin("Found: ",ktoa(qpt)," in DVDB with index ",itoa(db_iqpt)))
+     ! Read or reconstruct the dvscf potentials for all 3*natom perturbations.
+     ! This call allocates v1scf(cplex, nfftf, nspden, 3*natom))
+     call dvdb%readsym_allv1(db_iqpt, cplex, nfftf, ngfftf, v1scf, comm)
+   else
+     MSG_WARNING(sjoin("Cannot find q-point:", ktoa(qpt), "in DVDB file"))
+   end if
+ end if
+ print *, "Interpolated?"
+ print *, interpolated
+
+ !Initialize the ground state Hamiltonian. RF Hamiltonian initialized in the ipc loop because it changes
+ ABI_MALLOC(ph1d, (2,3*(2*mgfft+1)*natom))
+ call getph(cryst%atindx,natom,n1,n2,n3,ph1d,cryst%xred)
+ call init_hamiltonian(gs_hamkq,psps,pawtab,nspinor,nsppol,nspden,natom,&
+   dtset%typat,cryst%xred,nfft,mgfft,ngfft,cryst%rprimd,dtset%nloalg,&
+   usecprj=usecprj,ph1d=ph1d,nucdipmom=dtset%nucdipmom,use_gpu_cuda=dtset%use_gpu_cuda,&
+   comm_atom=mpi_enreg%comm_atom,mpi_atmtab=mpi_enreg%my_atmtab,mpi_spintab=mpi_enreg%my_isppoltab)
+
+ ! Allocate vlocal1 and vlocal with correct cplex. Note nvloc
+ ABI_MALLOC_OR_DIE(vlocal1,(cplex*n4,n5,n6,gs_hamkq%nvloc,natom3), ierr)
+ ABI_MALLOC(vlocal,(n4,n5,n6,gs_hamkq%nvloc))
+
+ ! Make a dummy vtrial for ground state (allocated to zero)
+ ABI_CALLOC(dummy_vtrial, (nfftf,nspden))
+
+ do ipc=1,natom3
+   idir = mod(ipc-1, 3) + 1
+   ipert = (ipc - idir) / 3 + 1
+   write(msg, '(a,2i4)') " Treating ipert, idir = ", ipert, idir
+   call wrtout(std_out, msg, do_flush=.True.)
+   
+   do spin=1,nsppol
+     ! Set up local potential vlocal1 with proper dimensioning, from vtrial1 taking into account the spin.
+     call rf_transgrid_and_pack(spin,nspden,psps%usepaw,cplex,nfftf,nfft,ngfft,gs_hamkq%nvloc,&
+               pawfgr,mpi_enreg,dummy_vtrial,v1scf(:,:,:,ipc),vlocal,vlocal1(:,:,:,:,ipc))
+
+     ! Continue to initialize the Hamiltonian. Why do this when we don't need it? Used a dummy before.
+     call gs_hamkq%load_spin(spin,vlocal=vlocal,with_nonlocal=.true.)
+     
+! GKA: This little block used to be right after the perturbation loop
+     ! Prepare application of the NL part.
+     call init_rf_hamiltonian(cplex,gs_hamkq,ipert,rf_hamkq,has_e1kbsc=.true.)
+     call rf_hamkq%load_spin(spin,vlocal1=vlocal1(:,:,:,:,ipc),with_nonlocal=.true.)
+
+       ! if PAW, one has to solve a generalized eigenproblem
+       ! Be careful here because I will need sij_opt==-1
+       gen_eigenpb = (psps%usepaw==1)
+       sij_opt = 0; if (gen_eigenpb) sij_opt = 1
+
+
+       ! GKA: Previous loop on 3*natom perturbations used to start here
+       ! This call is not optimal because there are quantities in out that do not depend on idir,ipert
+      !call getgh1c_setup(gs_hamkq,rf_hamkq,dtset,psps,kk,kq,idir,ipert,&    ! In
+      !  cryst%natom,cryst%rmet,cryst%gprimd,cryst%gmet,istwf_k,&            ! In
+      !  npw_k,npw_kq,useylmgr1,kg_k,ylm_k,kg_kq,ylm_kq,ylmgr_kq,&           ! In
+      !  dkinpw,nkpg,nkpg1,kpg_k,kpg1_k,kinpw1,ffnlk,ffnl1,ph3d,ph3d1)       ! Out
+
+
+       ! Hardcode the initial band !!!!!!!!!!!!  
+       ib2 = 1;
+
+       eig0nk = ebands_k%eig(ib2,ik,spin)
+       ! Use scissor shift on 0-order eigenvalue
+       eshift = eig0nk - dtset%dfpt_sciss
+
+      !call getgh1c(berryopt0,kets(:,:,ib2),cwaveprj0,h1_kets(:,:,ib2),&
+      !               grad_berry,gs1c,gs_hamkq,gvnlx1,idir,ipert,eshift,mpi_enreg,optlocal,&
+      !               optnl,opt_gvnlx1,rf_hamkq,sij_opt,tim_getgh1c,usevnl)
+       
+       !Free unused variables output from getgh1c
+      !ABI_FREE(kinpw1)
+      !ABI_FREE(kpg1_k)
+      !ABI_FREE(kpg_k)
+      !ABI_FREE(dkinpw)
+      !ABI_FREE(ffnlk)
+      !ABI_FREE(ffnl1)
+      !ABI_FREE(ph3d)
+      !ABI_FREE(gs1c)
+      !ABI_SFREE(ph3d1)
+   end do !spin
+   
+ end do !ipc
 end subroutine eph_gkq
 !!***
 
@@ -220,37 +397,6 @@ subroutine eph_gkk(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_k,eb
  real(dp),allocatable :: dummy_vtrial(:,:),gvnlx1(:,:), gs1c(:,:), gkq_atm(:,:,:,:)
  logical,allocatable :: bks_mask(:,:,:),bks_mask_kq(:,:,:),keep_ur(:,:,:),keep_ur_kq(:,:,:)
  type(pawcprj_type),allocatable  :: cwaveprj0(:,:) !natom,nspinor*usecprj)
-
- ! PAW is not implemented yet
- if (psps%usepaw == 1) then
-   MSG_ERROR("PAW not implemented")
-   ABI_UNUSED((/pawang%nsym, pawrad(1)%mesh_size/))
- end if
-
- my_rank = xmpi_comm_rank(comm); nproc = xmpi_comm_size(comm); i_am_master = my_rank == master
-
- ! Copy important dimensions
- natom = cryst%natom
- natom3 = 3 * natom
- nsppol = ebands_k%nsppol
- nspinor = ebands_k%nspinor
- nspden = dtset%nspden
- nkpt = ebands_k%nkpt
- mband = ebands_k%mband
- nkpt_kq = ebands_kq%nkpt
- mband_kq = ebands_kq%mband
- ecut = dtset%ecut
- !write(std_out, *)"ebands dims (b, k, s): ", ebands_k%mband, ebands_k%nkpt, ebands_k%nsppol
- !write(std_out, *)"ebands_kq dims (b, k, s): ", ebands_kq%mband, ebands_kq%nkpt, ebands_kq%nsppol
-
- ! Read in FFT information. Immediately needed for reading dvdb
- nfftf = product(ngfftf(1:3)); mgfftf = maxval(ngfftf(1:3))
- nfft = product(ngfft(1:3)) ; mgfft = maxval(ngfft(1:3))
- n1=ngfft(1); n2=ngfft(2); n3=ngfft(3)
- n4=ngfft(4); n5=ngfft(5); n6=ngfft(6)
-
- ! Open the DVDB file
- call dvdb%open_read(ngfftf, xmpi_comm_self)
 
 !************************************************************************
 

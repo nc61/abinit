@@ -67,7 +67,7 @@ module m_eph_driver
  use m_pawfgr,          only : pawfgr_type, pawfgr_init, pawfgr_destroy
  use m_phgamma,         only : eph_phgamma
  use m_efmas,           only : efmasdeg_free_array, efmasval_free_array, efmas_ncread
- use m_gkk,             only : eph_gkk, ncwrite_v1qnu
+ use m_gkk,             only : eph_gkk, eph_gkq, ncwrite_v1qnu
  use m_phpi,            only : eph_phpi
  use m_sigmaph,         only : sigmaph, test_phrotation
  use m_pspini,          only : pspini
@@ -655,10 +655,18 @@ subroutine eph(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps, rprim,
      ! Compute \delta V_{q,nu)(r) and dump results to netcdf file.
      call ncwrite_v1qnu(dvdb, dtset, ifc, strcat(dtfil%filnam_ds(4), "_V1QNU.nc"))
    end if
+ 
+ case (20)
+   print *, "Calling gkq"
+   ! Compute e-ph matrix elements.
+   call eph_gkq(wfk0_path, wfq_path, dtfil, ngfftc, ngfftf, dtset, cryst, ebands, ebands_kq, dvdb, ifc, &
+                pawfgr, pawang, pawrad, pawtab, psps, mpi_enreg, comm)
 
  case default
    MSG_ERROR(sjoin("Unsupported value of eph_task:", itoa(dtset%eph_task)))
  end select
+
+   
 
  !=====================
  !==== Free memory ====

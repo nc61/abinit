@@ -65,10 +65,71 @@ module m_gkk
  private
 !!***
 
+ public :: eph_gkq
  public :: eph_gkk
  public :: ncwrite_v1qnu          ! Compute \delta V_{q,nu)(r) and dump results to netcdf file.
 
 contains  !===========================================================================
+
+subroutine eph_gkq(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_k,ebands_kq,dvdb,ifc,&
+                       pawfgr,pawang,pawrad,pawtab,psps,mpi_enreg,comm)
+
+!Arguments ------------------------------------
+!scalars
+ character(len=*),intent(in) :: wfk0_path, wfq_path
+ integer,intent(in) :: comm
+ type(datafiles_type),intent(in) :: dtfil
+ type(dataset_type),intent(in) :: dtset
+ type(crystal_t),intent(in) :: cryst
+ type(ebands_t),intent(in) :: ebands_k, ebands_kq
+ type(dvdb_t),target,intent(inout) :: dvdb
+ type(pawang_type),intent(in) :: pawang
+ type(pseudopotential_type),intent(in) :: psps
+ type(pawfgr_type),intent(in) :: pawfgr
+ type(ifc_type),intent(in) :: ifc
+ type(mpi_type),intent(inout) :: mpi_enreg
+!arrays
+ integer,intent(in) :: ngfft(18),ngfftf(18)
+ type(pawrad_type),intent(in) :: pawrad(psps%ntypat*psps%usepaw)
+ type(pawtab_type),intent(in) :: pawtab(psps%ntypat*psps%usepaw)
+
+!Local variables ------------------------------
+!scalars
+ integer,parameter :: tim_getgh1c=1,berryopt0=0, useylmgr1=0,master=0
+ integer :: my_rank,nproc,mband,mband_kq,my_minb,my_maxb,nsppol,nkpt,nkpt_kq,idir,ipert
+ integer :: cplex,db_iqpt,natom,natom3,ipc,nspinor
+ integer :: ib1,ib2,band,ik,ikq,timerev_q
+ integer :: spin,istwf_k,istwf_kq,npw_k,npw_kq, comm_rpt
+ integer :: mpw,mpw_k,mpw_kq,ierr,my_kstart,my_kstop,ncid
+ integer :: n1,n2,n3,n4,n5,n6,nspden,ncerr
+ integer :: sij_opt,usecprj,usevnl,optlocal,optnl,opt_gvnlx1
+ integer :: nfft,nfftf,mgfft,mgfftf,nkpg,nkpg1, interpolated
+ real(dp) :: cpu,wall,gflops,ecut,eshift,eig0nk,dotr,doti
+ logical :: i_am_master, gen_eigenpb
+ type(wfd_t) :: wfd_k, wfd_kq
+ type(gs_hamiltonian_type) :: gs_hamkq
+ type(rf_hamiltonian_type) :: rf_hamkq
+ type(gkk_t) :: gkk2d
+ character(len=500) :: msg, what
+ character(len=fnlen) :: fname, gkkfilnam
+!arrays
+ integer :: g0_k(3),symq(4,2,cryst%nsym)
+ integer,allocatable :: kg_k(:,:),kg_kq(:,:),nband(:,:),nband_kq(:,:),blkflg(:,:), wfd_istwfk(:)
+ real(dp) :: kk(3),kq(3),qpt(3),phfrq(3*cryst%natom)
+ real(dp),allocatable :: displ_cart(:,:,:),displ_red(:,:,:), eigens_kq(:,:,:)
+ real(dp),allocatable :: grad_berry(:,:),kinpw1(:),kpg1_k(:,:),kpg_k(:,:),dkinpw(:)
+ real(dp),allocatable :: ffnlk(:,:,:,:),ffnl1(:,:,:,:),ph3d(:,:,:),ph3d1(:,:,:)
+ real(dp),allocatable :: v1scf(:,:,:,:),gkk(:,:,:,:,:)
+ real(dp),allocatable :: bras(:,:,:),kets(:,:,:),h1_kets(:,:,:)
+ real(dp),allocatable :: ph1d(:,:),vlocal(:,:,:,:),vlocal1(:,:,:,:,:)
+ real(dp),allocatable :: ylm_kq(:,:),ylm_k(:,:),ylmgr_kq(:,:,:)
+ real(dp),allocatable :: dummy_vtrial(:,:),gvnlx1(:,:), gs1c(:,:), gkq_atm(:,:,:,:)
+ logical,allocatable :: bks_mask(:,:,:),bks_mask_kq(:,:,:),keep_ur(:,:,:),keep_ur_kq(:,:,:)
+ type(pawcprj_type),allocatable  :: cwaveprj0(:,:) !natom,nspinor*usecprj)
+
+ print *, "Made it into eph_gkq !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+
+end subroutine eph_gkq
 !!***
 
 !!****f* m_gkk/eph_gkk
@@ -159,6 +220,37 @@ subroutine eph_gkk(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_k,eb
  real(dp),allocatable :: dummy_vtrial(:,:),gvnlx1(:,:), gs1c(:,:), gkq_atm(:,:,:,:)
  logical,allocatable :: bks_mask(:,:,:),bks_mask_kq(:,:,:),keep_ur(:,:,:),keep_ur_kq(:,:,:)
  type(pawcprj_type),allocatable  :: cwaveprj0(:,:) !natom,nspinor*usecprj)
+
+ ! PAW is not implemented yet
+ if (psps%usepaw == 1) then
+   MSG_ERROR("PAW not implemented")
+   ABI_UNUSED((/pawang%nsym, pawrad(1)%mesh_size/))
+ end if
+
+ my_rank = xmpi_comm_rank(comm); nproc = xmpi_comm_size(comm); i_am_master = my_rank == master
+
+ ! Copy important dimensions
+ natom = cryst%natom
+ natom3 = 3 * natom
+ nsppol = ebands_k%nsppol
+ nspinor = ebands_k%nspinor
+ nspden = dtset%nspden
+ nkpt = ebands_k%nkpt
+ mband = ebands_k%mband
+ nkpt_kq = ebands_kq%nkpt
+ mband_kq = ebands_kq%mband
+ ecut = dtset%ecut
+ !write(std_out, *)"ebands dims (b, k, s): ", ebands_k%mband, ebands_k%nkpt, ebands_k%nsppol
+ !write(std_out, *)"ebands_kq dims (b, k, s): ", ebands_kq%mband, ebands_kq%nkpt, ebands_kq%nsppol
+
+ ! Read in FFT information. Immediately needed for reading dvdb
+ nfftf = product(ngfftf(1:3)); mgfftf = maxval(ngfftf(1:3))
+ nfft = product(ngfft(1:3)) ; mgfft = maxval(ngfft(1:3))
+ n1=ngfft(1); n2=ngfft(2); n3=ngfft(3)
+ n4=ngfft(4); n5=ngfft(5); n6=ngfft(6)
+
+ ! Open the DVDB file
+ call dvdb%open_read(ngfftf, xmpi_comm_self)
 
 !************************************************************************
 
@@ -905,6 +997,7 @@ subroutine v1atm_to_vqnu(cplex, nfft, nspden, natom3, v1_atm, displ_red, v1_qnu)
  end do
 
 end subroutine v1atm_to_vqnu
+
 !!***
 
 !----------------------------------------------------------------------

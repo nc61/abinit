@@ -1386,16 +1386,40 @@ subroutine gkq_atm_to_gkq_nu(gkq_atm, atm_mass,displ_red, natom3, ntypat, phfreq
 !arrays
  integer,intent(in) :: typat(ntypat)
  real(dp),intent(in) :: gkq_atm(2,natom3),displ_red(2,natom3,natom3),phfreqs(natom3),atm_mass(ntypat)
- real(dp),intent(out) :: gkq_nu(2, natom3)
+ real(dp),intent(out) :: gkq_nu(2,natom3)
 !Local variables
- integer :: nu
- real(dp) :: freq_prefs(natom3)
+ integer :: ipc,nu,natom,iat,idir
+ real(dp) :: freq_prefs(natom3),mass_pref
  
  freq_prefs = sqrt(one/two/phfreqs)
- print *, "Entered atom to nu"
- do nu = 1,natom3
-   
- end do
+ nu = 1
+ natom = natom3/3
+
+ gkq_nu = zero
+
+ do nu=1,natom3
+   ipc = 0
+   do iat = 1,natom
+     print *, "Atom type"
+     print *, typat(iat)
+     print *, "Atomic mass"
+     print *, atm_mass(typat(iat))
+     mass_pref = sqrt(one/atm_mass(typat(iat)))
+     print *, "mass_pref"
+     print *, mass_pref
+     do idir = 1,3
+       ipc = ipc + 1
+       print *, "ipc"
+       print *, ipc
+       gkq_nu(:,nu) = gkq_nu(:,nu) + mass_pref*(displ_red(1,ipc,nu)*gkq_atm(1,ipc) - displ_red(2,ipc,nu)*gkq_atm(2,ipc) &
+&                                             + displ_red(1,ipc,nu)*gkq_atm(2,ipc) + displ_red(1,ipc,nu)*gkq_atm(2,ipc))
+     end do !idir
+     gkq_nu(:,nu) = freq_prefs(nu)*gkq_nu(:,nu)
+   end do !iat
+   print *, "gkq_nu"
+ end do !nu
+ print *, gkq_nu(2,:)
+ 
 
 end subroutine gkq_atm_to_gkq_nu
 

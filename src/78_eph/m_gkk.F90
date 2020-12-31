@@ -76,6 +76,7 @@ module m_gkk
 !!***
 
  public :: eph_gkq
+ public :: find_mpw
  public :: eph_gkk
  public :: absrate_ind
  public :: ncwrite_v1qnu          ! Compute \delta V_{q,nu)(r) and dump results to netcdf file.
@@ -472,7 +473,7 @@ subroutine absrate_ind(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_
           energy_cv = ebands_kq%eig(cband,ikq,spin) - ebands_k%eig(vband,ik,spin)
           write(msg, '(a,2i4,a,f6.2)') "Energy gap for bands ", vband, cband,"= ",energy_cv
           call wrtout(std_out, msg, do_flush=.True.)
-          call tetra%get_onewk_wvals(ik,1,nw,opt_freq,1,nkpt
+          !call tetra%get_onewk_wvals(ik,1,nw,opt_freq,1,nkpt
           do iband=1,mband
           end do !iband
         end do !cband

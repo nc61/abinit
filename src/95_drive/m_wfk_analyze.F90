@@ -38,6 +38,7 @@ module m_wfk_analyze
  use m_dtset
  use m_dtfil
  use m_distribfft
+ use m_nlo
 
  use defs_datatypes,    only : pseudopotential_type, ebands_t
  use defs_abitypes,     only : mpi_type
@@ -326,12 +327,14 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
  select case (dtset%wfk_task)
 
  case (WFK_TASK_FULLBZ)
-   ! Read wfk0_path and build WFK in full BZ.
-   if (my_rank == master) then
-     wfkfull_path = dtfil%fnameabo_wfk; if (dtset%iomode == IO_MODE_ETSF) wfkfull_path = nctk_ncify(wfkfull_path)
-     call wfk_tofullbz(wfk0_path, dtset, psps, pawtab, wfkfull_path)
-   end if
-   call xmpi_barrier(comm)
+  !! Read wfk0_path and build WFK in full BZ.
+  !if (my_rank == master) then
+  !  wfkfull_path = dtfil%fnameabo_wfk; if (dtset%iomode == IO_MODE_ETSF) wfkfull_path = nctk_ncify(wfkfull_path)
+  !  call wfk_tofullbz(wfk0_path, dtset, psps, pawtab, wfkfull_path)
+  !end if
+  !call xmpi_barrier(comm)
+
+   call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 500, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.03028893129_dp , 1.5_dp, comm, dtset, psps, wfk0_path)
 
  case (WFK_TASK_KPTS_ERANGE)
    call sigtk_kpts_in_erange(dtset, cryst, ebands, psps, pawtab, dtfil%filnam_ds(4), comm)

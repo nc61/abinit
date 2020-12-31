@@ -76,7 +76,6 @@ module m_gkk
 !!***
 
  public :: eph_gkq
- public :: find_mpw
  public :: eph_gkk
  public :: absrate_ind
  public :: ncwrite_v1qnu          ! Compute \delta V_{q,nu)(r) and dump results to netcdf file.

@@ -106,22 +106,77 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  integer,intent(in) :: ngfft(18),ngfftf(18)
  type(pawrad_type),intent(in) :: pawrad(psps%ntypat*psps%usepaw)
  type(pawtab_type),intent(in) :: pawtab(psps%ntypat*psps%usepaw)
+ type(pawcprj_type),allocatable  :: cwaveprj0(:,:) !natom,nspinor*usecprj)
 
 !Local variables ------------------------------
 !scalars
  type(dvqop_t) :: dvqop
- integer :: mpw
+ integer :: mpw, ik,spin,ib1,ib2,ikq,npw_k, istwfk,istwfkq, usecprj
+ type(wfd_t) :: wfd
 
- real(dp) :: qpt(3)
+ real(dp) :: qpt(3),kpt(3),kqpt(3)
+ integer :: g0_k(3)
+ logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
+ integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:)
+ real(dp),allocatable :: cg_ket(:,:,:)
+ 
+ ABI_MALLOC(nband, (ebands%nkpt, ebands%nsppol))
+ ABI_MALLOC(bks_mask, (dtset%mband, ebands%nkpt, ebands%nsppol))
+ ABI_MALLOC(keep_ur, (dtset%mband, ebands%nkpt, ebands%nsppol))
+ !WFD
+ ! Read in all wave functions (memory intensive)
+ bks_mask = .True.; keep_ur = .False.
+ ABI_MALLOC(wfd_istwfk, (ebands%nkpt))
+ wfd_istwfk = 1
+ nband = dtset%mband
 
- qpt = [0.1_dp, zero, zero];
+ call wfd_init(wfd, cryst, pawtab, psps, keep_ur, dtset%mband, nband, ebands%nkpt, ebands%nsppol, bks_mask,&
+               dtset%nspden, ebands%nspinor, dtset%ecut, dtset%ecutsm, dtset%dilatmx, wfd_istwfk,&
+               ebands%kptns, ngfft, dtset%nloalg, dtset%prtvol, dtset%pawprtvol, comm)
+ call wfd%read_wfk(wfk0_path, iomode_from_fname(wfk0_path))
+
+ ABI_FREE(bks_mask)
+ ABI_FREE(keep_ur)
+ ABI_FREE(wfd_istwfk)
+ ABI_FREE(nband)
+
+ ik = 1
+ ib1 = 1
+ ib2 = 1
+ spin = 1
+
+ qpt = ebands%kptns(:,2)
+ kpt = ebands%kptns(:,ik)
+ kqpt = kpt + qpt
+ print *, "kqpt"
+ print *, kqpt
+
+ call findqg0(ikq, g0_k, kqpt, ebands%nkpt, ebands%kptns, [1,1,1])
 
  call find_mpw(mpw, ebands%kptns, ebands%nsppol, ebands%nkpt, cryst%gmet,dtset%ecut,comm)
+ print *, "cg_ket dims"
+ print *, mpw*ebands%nspinor
+ print *, dtset%mband
+ ABI_MALLOC(cg_ket, (2, mpw*ebands%nspinor, dtset%mband))
  dvqop = dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf)
- call dvqop%load_vlocal1(qpt,1,pawfgr,comm)
+ call dvqop%load_vlocal1(qpt,spin,pawfgr,comm)
  
- print *,"in absrate2"
+ call dvqop%setup_spin_kpoint(dtset, cryst, psps, spin, kpt, kqpt, wfd%istwfk(ik), wfd%istwfk(ikq),&
+                              wfd%npwarr(ik), wfd%npwarr(ikq), wfd%kdata(ik)%kg_k, wfd%kdata(ikq)%kg_k)
  
+ ! Copy u_k(G)
+ ABI_CHECK(mpw >= npw_k, "mpw < npw_k")
+ call wfd%copy_cg(ib1, ikq, spin, cg_ket)
+
+ usecprj = 0
+ ABI_MALLOC(cwaveprj0, (cryst%natom, ebands%nspinor*usecprj))
+
+ call dvqop%apply(ebands%eig(ib1,ik,spin), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
+ 
+ print *, ebands%mband
+ print *, ebands%nspinor
+ ABI_DEALLOCATE(cg_ket)
+ call pawcprj_free(cwaveprj0)
 
 end subroutine absrate_ind2
 
@@ -379,6 +434,7 @@ subroutine absrate_ind(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_
  
  ABI_MALLOC(bras, (2, mpw*nspinor, mband))
  ABI_MALLOC(kets, (2, mpw*nspinor, mband))
+ ABI_MALLOC(bras, (2, mpw*nspinor, mband))
  ABI_MALLOC(h1_kets, (2, mpw*nspinor, mband))
  do iqpt=2,3
    qpt = qptns(:,iqpt)

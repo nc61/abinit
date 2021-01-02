@@ -21,6 +21,9 @@ MODULE m_dvq
  use m_ebands
  use m_getgh1c
  use m_dvdb
+ use m_mpinfo
+ use m_initylmg
+ use m_pawcprj
 #ifdef HAVE_NETCDF
  use netcdf
 #endif
@@ -115,6 +118,11 @@ MODULE m_dvq
   procedure :: load_vlocal1 => dvqop_load_vlocal1 
   !Load in the potential for each atomic perturbation
 
+  procedure :: setup_spin_kpoint => dvqop_setup_spin_kpoint
+
+  procedure :: apply => dvqop_apply
+
+
  end type dvqop_t
 
  public :: dvqop_new
@@ -201,11 +209,10 @@ type(dvqop_t) function dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mp
  ABI_MALLOC(new%gh1c, (2, new%mpw*dtset%nspinor, natom3))
  ABI_MALLOC(new%gs1c, (2, new%mpw*dtset%nspinor, natom3))
 
-
  ABI_MALLOC(new%gs_hamkq, (natom3))
  ABI_MALLOC(new%rf_hamkq, (natom3))
 
- 
+ ABI_MALLOC(new%htg, (natom3))
  do ipert=1,natom3
    ! ==== Initialize most of the Hamiltonian (and derivative) ====
    ! 1) Allocate all arrays and initialize quantities that do not depend on k and spin.
@@ -222,6 +229,7 @@ type(dvqop_t) function dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mp
      !&paw_ij1=paw_ij1,comm_atom=mpi_enreg%comm_atom,mpi_atmtab=mpi_enreg%my_atmtab,&
      !&mpi_spintab=mpi_enreg%my_isppoltab)
  end do
+
 
 end function dvqop_new
 
@@ -265,11 +273,188 @@ subroutine dvqop_load_vlocal1(self,qpt,spin,pawfgr,comm)
    call rf_transgrid_and_pack(spin,self%nspden,self%usepaw,self%cplex,self%nfftf,self%nfft, self%ngfft,&
                               self%gs_hamkq(ipc)%nvloc, pawfgr, self%mpi_enreg, vdummy, vlocal1, vdummy_reshaped, vlocal1_reshaped)
    call self%rf_hamkq(ipc)%load_spin(spin,vlocal1=vlocal1_reshaped,with_nonlocal=.true.)
+   call self%gs_hamkq(ipc)%load_spin(spin,vlocal=vdummy_reshaped,with_nonlocal=.true.)
  end do
  ABI_FREE(vlocal1)
  
 
 end subroutine dvqop_load_vlocal1
+!!***
+!----------------------------------------------------------------------
+
+!!****f* m_dvq/dvqop_setup_spin_kpoint
+!! NAME
+!!  dvqop_setup_spin_kpoint
+!!
+!! FUNCTION
+!!  Prepare internal tables that depend on k-point/spin
+!!
+!! INPUTS
+!!  dtset<dataset_type>=All input variables for this dataset.
+!!  cryst<crystal_t>=Crystal structure.
+!!  psps<pseudopotential_type>=Variables related to pseudopotentials.
+!!  spin: spin index
+!!  kpoint(3): K-point in reduced coordinates.
+!!  istwkf_k: defines storage of wavefunctions for this k-point
+!!  npw_k: Number of planewaves.
+!!  kg_k(3,npw_k)=reduced planewave coordinates.
+!!
+!! PARENTS
+!!
+!! CHILDREN
+!!
+!! SOURCE
+
+subroutine dvqop_setup_spin_kpoint(self, dtset, cryst, psps, spin, kpoint, kqpoint, istwf_k, istwf_kq, npw_k, npw_kq, kg_k, kg_kq)
+
+!Arguments ------------------------------------
+!scalars
+ integer,intent(in) :: spin, npw_k, npw_kq, istwf_k, istwf_kq
+ class(dvqop_t),intent(inout) :: self
+ type(crystal_t) :: cryst
+ type(dataset_type),intent(in) :: dtset
+ type(pseudopotential_type),intent(in) :: psps
+!arrays
+ integer,intent(in) :: kg_k(3,npw_k),kg_kq(3,npw_k)
+ real(dp),intent(in) :: kpoint(3), kqpoint(3)
+
+!Local variables-------------------------------
+!scalars
+ integer,parameter :: nkpt1=1, nsppol1=1
+ type(mpi_type) :: mpienreg_seq
+!arrays
+ integer :: npwarr(nkpt1), dummy_nband(nkpt1*nsppol1)
+ integer :: nkpg, nkpg1, useylmgr1, optder !, nylmgr1
+ integer :: ipc, ipert, idir
+ real(dp),allocatable :: ylm_k(:,:),ylm_kq(:,:),ylmgr1_k(:,:,:),ylmgr1_kq(:,:,:)
+
+
+!************************************************************************
+
+ ABI_CHECK(npw_k <= self%mpw, "npw_k > mpw!")
+ ABI_CHECK(npw_kq <= self%mpw, "npw_kq > mpw!")
+ self%kpoint = kpoint
+
+ ! Set up the spherical harmonics (Ylm) at k+q if useylm = 1
+ useylmgr1 = 0; optder = 0
+ if (psps%useylm == 1) then
+   useylmgr1 = 1; optder = 1
+ end if
+
+ ABI_MALLOC(ylm_k, (npw_k, psps%mpsang**2 * psps%useylm))
+ ABI_MALLOC(ylm_kq, (npw_kq, psps%mpsang**2 * psps%useylm))
+ ABI_MALLOC(ylmgr1_k, (npw_k, 3+6*(optder/2), psps%mpsang**2*psps%useylm*useylmgr1))
+ ABI_MALLOC(ylmgr1_kq, (npw_kq, 3+6*(optder/2), psps%mpsang**2*psps%useylm*useylmgr1))
+
+ if (psps%useylm == 1) then
+   ! Fake MPI_type for sequential part. dummy_nband and nsppol1 are not used in sequential mode.
+   call initmpi_seq(mpienreg_seq)
+   dummy_nband = 0; npwarr = npw_k
+   call initylmg(cryst%gprimd, kg_k, kpoint, nkpt1, mpienreg_seq, psps%mpsang, npw_k, dummy_nband, nkpt1, &
+      npwarr, nsppol1, optder, cryst%rprimd, ylm_k, ylmgr1_k)
+   call destroy_mpi_enreg(mpienreg_seq)
+ end if
+
+ do ipc=1,self%natom3
+   idir = mod(ipc-1, 3) + 1
+   ipert = (ipc - idir) / 3 + 1
+   call self%htg(ipc)%free()
+
+   ! Continue to initialize the Hamiltonian
+   call self%gs_hamkq(ipc)%load_spin(spin, with_nonlocal=.true.)
+   call self%rf_hamkq(ipc)%load_spin(spin, with_nonlocal=.true.)
+
+   ! We need ffnl1 and dkinpw for all dir,atom. Note that the Hamiltonian objects use pointers to keep a reference
+   ! to the output results of this routine.
+   ! This is the reason why we need to store the targets in self%htg
+ call getgh1c_setup(self%gs_hamkq(ipc), self%rf_hamkq(ipc), dtset, psps, kpoint, kqpoint, idir, ipert, & ! In
+   cryst%natom, cryst%rmet, cryst%gprimd, cryst%gmet, istwf_k, npw_k, npw_kq, &            ! In
+   useylmgr1, kg_k, ylm_k, kg_kq, ylm_kq, ylmgr1_k, &                                       ! In
+   self%htg(ipc)%dkinpw, nkpg, nkpg1, self%htg(ipc)%kpg_k, self%htg(ipc)%kpg1_k, &     ! Out
+   self%htg(ipc)%kinpw1, self%htg(ipc)%ffnlk, self%htg(ipc)%ffnl1, &                   ! Out
+   self%htg(ipc)%ph3d, self%htg(ipc)%ph3d1)                                             ! Out
+ end do
+
+ ABI_FREE(ylm_k)
+ ABI_FREE(ylmgr1_k)
+ ABI_FREE(ylm_kq)
+ ABI_FREE(ylmgr1_kq)
+
+end subroutine dvqop_setup_spin_kpoint
+!!***
+!----------------------------------------------------------------------
+
+!!****f* m_dvq/dvqop_apply
+!! NAME
+!!  dvqop_apply
+!!
+!! FUNCTION
+!!
+!! INPUTS
+!!  eig0nk: Eigenvalue associated to the wavefunction.
+!!  npw_k: Number of planewaves.
+!!  nspinor: Number of spinor components.
+!!  cwave(2,npw_k*nspinor)=input wavefunction in reciprocal space
+!!  cwaveprj(natom,nspinor*usecprj)=<p_lmn|C> coefficients for wavefunction |C> (and 1st derivatives)
+!!     if not allocated or size=0, they are locally computed (and not sorted)!!
+!!
+!! SIDE EFFECTS
+!! Stores:
+!!  gh1c(2,npw1*nspinor)= <G|H^(1)|C> or  <G|H^(1)-lambda.S^(1)|C> on the k+q sphere
+!!                        (only kinetic+non-local parts if optlocal=0)
+!!
+!! PARENTS
+!!
+!! CHILDREN
+!!
+!! SOURCE
+
+subroutine dvqop_apply(self, eig0nk, npw_k, nspinor, cwave, cwaveprj)
+
+!Arguments ------------------------------------
+!scalars
+ class(dvqop_t),intent(inout) :: self
+ integer,intent(in) :: npw_k, nspinor
+ real(dp),intent(in) :: eig0nk
+!arrays
+ real(dp),intent(inout) :: cwave(2,npw_k*nspinor)
+ type(pawcprj_type),intent(inout) :: cwaveprj(:,:)
+
+!Local variables-------------------------------
+!scalars
+ integer,parameter :: berryopt0 = 0, optlocal0 = 0, tim_getgh1c = 1, usevnl0 = 0, opt_gvnlx1 = 0
+ integer :: sij_opt, ispinor, ipws, ipw, optnl
+ integer :: ipc, idir, ipert
+ real(dp) :: eshift
+!arrays
+ real(dp) :: grad_berry(2,(berryopt0/4)), gvnlx1(2,usevnl0)
+ real(dp),pointer :: dkinpw(:),kinpw1(:)
+
+!************************************************************************
+
+ self%eig0nk = eig0nk
+
+ if (self%inclvkb /= 0) then
+   ! optlocal0 = 0: local part of H^(1) is not computed in gh1c=<G|H^(1)|C>
+   ! optnl = 2: non-local part of H^(1) is totally computed in gh1c=<G|H^(1)|C>
+   ! opt_gvnlx1 = option controlling the use of gvnlx1 array:
+   optnl = 2 !; if (self%inclvkb == 0) optnl = 0
+
+   eshift = self%eig0nk - self%dfpt_sciss
+   do ipc=1,self%natom3
+     idir = mod(ipc-1, 3) + 1
+     ipert = (ipc - idir) / 3 + 1
+     sij_opt = self%gs_hamkq(ipc)%usepaw
+     call getgh1c(berryopt0, cwave, cwaveprj, self%gh1c(:,:,ipc), &
+       grad_berry, self%gs1c(:,:,ipc), self%gs_hamkq(ipc), gvnlx1, idir, ipert, eshift, self%mpi_enreg, optlocal0, &
+       optnl, opt_gvnlx1, self%rf_hamkq(ipc), sij_opt, tim_getgh1c, usevnl0)
+   end do
+
+ else
+   MSG_ERROR("inclvkb = 0 not implemented")
+ end if
+
+end subroutine dvqop_apply
 !!***
 subroutine ham_targets_free(self)
 

@@ -34,6 +34,7 @@ sources = [
  "m_ddb_hdr.F90",
  "m_ddk.F90",
  "m_dvdb.F90",
+ "m_dvq.F90",
  "m_efmas.F90",
  "m_eig2d.F90",
  "m_rf2.F90",

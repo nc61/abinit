@@ -37,6 +37,7 @@ module m_gkk
  use m_wfk
  use m_nctk
  use m_dtfil
+ use m_dvq
 #ifdef HAVE_NETCDF
  use netcdf
 #endif
@@ -78,10 +79,51 @@ module m_gkk
  public :: eph_gkq
  public :: eph_gkk
  public :: absrate_ind
+ public :: absrate_ind2
  public :: ncwrite_v1qnu          ! Compute \delta V_{q,nu)(r) and dump results to netcdf file.
  public :: gkq_atm_to_gkq_nu
 
 contains  !===========================================================================
+
+subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
+                       pawfgr,pawang,pawrad,pawtab,psps,mpi_enreg,comm)
+
+!Arguments ------------------------------------
+!scalars
+ character(len=*),intent(in) :: wfk0_path 
+ integer,intent(in) :: comm
+ type(datafiles_type),intent(in) :: dtfil
+ type(dataset_type),intent(in) :: dtset
+ type(crystal_t),intent(in) :: cryst
+ type(ebands_t),intent(in) :: ebands
+ type(dvdb_t),target,intent(inout) :: dvdb
+ type(pawang_type),intent(in) :: pawang
+ type(pseudopotential_type),intent(in) :: psps
+ type(pawfgr_type),intent(in) :: pawfgr
+ type(ifc_type),intent(in) :: ifc
+ type(mpi_type),intent(inout) :: mpi_enreg
+!arrays
+ integer,intent(in) :: ngfft(18),ngfftf(18)
+ type(pawrad_type),intent(in) :: pawrad(psps%ntypat*psps%usepaw)
+ type(pawtab_type),intent(in) :: pawtab(psps%ntypat*psps%usepaw)
+
+!Local variables ------------------------------
+!scalars
+ type(dvqop_t) :: dvqop
+ integer :: mpw
+
+ real(dp) :: qpt(3)
+
+ qpt = [0.1_dp, zero, zero];
+
+ call find_mpw(mpw, ebands%kptns, ebands%nsppol, ebands%nkpt, cryst%gmet,dtset%ecut,comm)
+ dvqop = dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf)
+ call dvqop%load_vlocal1(qpt,1,pawfgr,comm)
+ 
+ print *,"in absrate2"
+ 
+
+end subroutine absrate_ind2
 
 subroutine absrate_ind(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_k,ebands_kq,dvdb,ifc,&
                        pawfgr,pawang,pawrad,pawtab,psps,mpi_enreg,comm)

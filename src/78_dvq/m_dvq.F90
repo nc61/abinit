@@ -24,6 +24,7 @@ MODULE m_dvq
  use m_mpinfo
  use m_initylmg
  use m_pawcprj
+ use m_ifc
 #ifdef HAVE_NETCDF
  use netcdf
 #endif
@@ -32,6 +33,9 @@ MODULE m_dvq
  use m_pawtab,        only : pawtab_type
  use m_pawfgr,         only : pawfgr_type
  use m_fstrings,      only : ktoa, sjoin
+ use m_cgtools,        only : dotprod_g
+ use m_ephtk,         only : ephtk_gkknu_from_atm
+ use m_kg,             only : getph
  implicit none
 
  private
@@ -98,6 +102,12 @@ MODULE m_dvq
 
   real(dp) :: rprimd(3,3)
 
+  real(dp),allocatable :: phfreq(:)
+  real(dp),allocatable :: displ_red(:,:,:)
+  real(dp),allocatable :: displ_cart(:,:,:)
+
+  type(ifc_type) :: ifc
+
   type(MPI_type),pointer :: mpi_enreg => null()
 
   type(gs_hamiltonian_type),allocatable :: gs_hamkq(:)
@@ -115,12 +125,14 @@ MODULE m_dvq
 
  contains
 
-  procedure :: load_vlocal1 => dvqop_load_vlocal1 
+  procedure :: setupq => dvqop_setupq 
   !Load in the potential for each atomic perturbation
 
   procedure :: setup_spin_kpoint => dvqop_setup_spin_kpoint
 
   procedure :: apply => dvqop_apply
+
+  procedure :: get_gkq => dvqop_get_gkq
 
 
  end type dvqop_t
@@ -155,7 +167,7 @@ MODULE m_dvq
 !!
 !! SOURCE
 
-type(dvqop_t) function dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf) result(new)
+type(dvqop_t) function dvqop_new(dtset, dvdb, cryst, ifc, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf) result(new)
 
 !Arguments ------------------------------------
 !scalars
@@ -165,15 +177,16 @@ type(dvqop_t) function dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mp
  type(MPI_type),target,intent(in) :: mpi_enreg
  integer,intent(in) :: mpw
  type(dvdb_t),intent(inout),target :: dvdb
+ type(ifc_type),intent(in) :: ifc
 !arrays
  integer,intent(in) :: ngfft(18),ngfftf(18)
  type(pawtab_type),intent(in) :: pawtab(psps%ntypat*psps%usepaw)
 
 !Local variables-------------------------------
 !scalars
- integer,parameter :: cplex1 = 1
- integer :: nfft, mgfft, ipert, natom3
-
+ integer,parameter :: cplex1 = 1 
+ integer :: nfft, mgfft, ipc, natom3, idir, ipert, usecprj
+ real(dp),allocatable :: ph1d(:,:)
 ! *************************************************************************
 
  ABI_CHECK(dtset%usepaw == 0, "PAW not tested/implemented!")
@@ -202,6 +215,7 @@ type(dvqop_t) function dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mp
  new%use_ftinterp = dtset%eph_use_ftinterp
  new%ddb_ngqpt = dtset%ddb_ngqpt
  new%ddb_shiftq = dtset%ddb_shiftq
+ new%ifc = ifc
 
  new%dvdb => dvdb
  call dvdb%open_read(ngfftf, xmpi_comm_self)
@@ -212,34 +226,51 @@ type(dvqop_t) function dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mp
  ABI_MALLOC(new%gs_hamkq, (natom3))
  ABI_MALLOC(new%rf_hamkq, (natom3))
 
+ ABI_MALLOC(new%displ_red, (2, natom3, natom3))
+ ABI_MALLOC(new%displ_cart, (2, natom3, natom3))
+ ABI_MALLOC(new%phfreq, (natom3))
+
+ usecprj = 0 
+
+ ABI_MALLOC(ph1d, (2,3*(2*mgfft+1)*cryst%natom))
+ call getph(cryst%atindx,cryst%natom,ngfft(1),ngfft(2),ngfft(3),ph1d,cryst%xred)
  ABI_MALLOC(new%htg, (natom3))
- do ipert=1,natom3
+ do ipc=1,natom3
+    idir = mod(ipc-1, 3) + 1
+    ipert = (ipc - idir) / 3 + 1
    ! ==== Initialize most of the Hamiltonian (and derivative) ====
    ! 1) Allocate all arrays and initialize quantities that do not depend on k and spin.
    ! 2) Perform the setup needed for the non-local factors:
    ! * Norm-conserving: Constant kleimann-Bylander energies are copied from psps to gs_hamk.
    ! * PAW: Initialize the overlap coefficients and allocate the Dij coefficients.
-   call init_hamiltonian(new%gs_hamkq(ipert), psps, pawtab, dtset%nspinor, dtset%nsppol, dtset%nspden, cryst%natom,&
-     cryst%typat, cryst%xred, nfft, mgfft, ngfft, cryst%rprimd, dtset%nloalg)
+
+   !call init_hamiltonian(new%gs_hamkq(ipc), psps, pawtab, dtset%nspinor, dtset%nsppol, dtset%nspden, cryst%natom,&
+     !cryst%typat, cryst%xred, nfft, mgfft, ngfft, cryst%rprimd, dtset%nloalg)
      !paw_ij=paw_ij,comm_atom=mpi_enreg%comm_atom,mpi_atmtab=mpi_enreg%my_atmtab,mpi_spintab=mpi_enreg%my_isppoltab,&
      !usecprj=usecprj,ph1d=ph1d,nucdipmom=dtset%nucdipmom,use_gpu_cuda=dtset%use_gpu_cuda)
-
+ call init_hamiltonian(new%gs_hamkq(ipc),psps,pawtab,dtset%nspinor,dtset%nsppol,dtset%nspden,cryst%natom,&
+   dtset%typat,cryst%xred,nfft,mgfft,ngfft,cryst%rprimd,dtset%nloalg,&
+   usecprj=usecprj,ph1d=ph1d,nucdipmom=dtset%nucdipmom,use_gpu_cuda=dtset%use_gpu_cuda,&
+   comm_atom=mpi_enreg%comm_atom,mpi_atmtab=mpi_enreg%my_atmtab,mpi_spintab=mpi_enreg%my_isppoltab)
    ! Prepare application of the NL part.
-   call init_rf_hamiltonian(cplex1, new%gs_hamkq(ipert), ipert, new%rf_hamkq(ipert), has_e1kbsc=.true.)
+   call init_rf_hamiltonian(cplex1, new%gs_hamkq(ipc), ipert, new%rf_hamkq(ipc), has_e1kbsc=.true.)
      !&paw_ij1=paw_ij1,comm_atom=mpi_enreg%comm_atom,mpi_atmtab=mpi_enreg%my_atmtab,&
      !&mpi_spintab=mpi_enreg%my_isppoltab)
  end do
 
+ ABI_DEALLOCATE(ph1d)
+
 
 end function dvqop_new
 
-subroutine dvqop_load_vlocal1(self,qpt,spin,pawfgr,comm)
+subroutine dvqop_setupq(self,cryst,qpt,spin,pawfgr,comm)
 
  class(dvqop_t),intent(inout) :: self
  integer,intent(in) :: spin
  integer :: nfftf
  real(dp),intent(in) :: qpt(3)
  type(pawfgr_type),intent(in) :: pawfgr
+ type(crystal_t),intent(in) :: cryst
  integer,intent(in) :: comm
 
  integer :: ipc,cplex,interpolated,comm_rpt,db_iqpt
@@ -276,9 +307,21 @@ subroutine dvqop_load_vlocal1(self,qpt,spin,pawfgr,comm)
    call self%gs_hamkq(ipc)%load_spin(spin,vlocal=vdummy_reshaped,with_nonlocal=.true.)
  end do
  ABI_FREE(vlocal1)
+
+ call self%ifc%fourq(cryst, qpt, self%phfreq, self%displ_cart, out_displ_red=self%displ_red)
  
 
-end subroutine dvqop_load_vlocal1
+end subroutine dvqop_setupq
+
+subroutine dvqop_load_displfreq(self, cryst, qpt)
+
+ class(dvqop_t),intent(inout) :: self
+ type(crystal_t),intent(in) :: cryst
+ real(dp),intent(in) :: qpt(3)
+
+ call self%ifc%fourq(cryst, qpt, self%phfreq, self%displ_cart, out_displ_red=self%displ_red)
+
+end subroutine dvqop_load_displfreq
 !!***
 !----------------------------------------------------------------------
 
@@ -455,6 +498,59 @@ subroutine dvqop_apply(self, eig0nk, npw_k, nspinor, cwave, cwaveprj)
  end if
 
 end subroutine dvqop_apply
+!----------------------------------------------------------------------
+
+!!****f* m_ddk/ddkop_get_vdiag
+!! NAME
+!!  ddkop_get_vdiag
+!!
+!! FUNCTION
+!!  Simplified interface to compute the diagonal matrix element of the velocity operator in cartesian coords.
+!!
+!! INPUTS
+!!
+!! PARENTS
+!!
+!! CHILDREN
+!!
+!! SOURCE
+
+function dvqop_get_gkq(self, eig0nk, istwf_k, npw_k, istwf_kq, npw_kq, nspinor, cwave_bra, cwave_ket, cwaveprj, mode) result(gkq)
+
+!Arguments ------------------------------------
+!scalars
+ class(dvqop_t),intent(inout) :: self
+ integer,intent(in) :: istwf_k, istwf_kq, npw_k, npw_kq, nspinor
+ real(dp),intent(in) :: eig0nk
+ character(len=*),optional,intent(in) :: mode
+!arrays
+ real(dp),intent(inout) :: cwave_ket(2,npw_k*nspinor), cwave_bra(2,npw_k*nspinor)
+ type(pawcprj_type),intent(inout) :: cwaveprj(:,:)
+ 
+
+!Local variables-------------------------------
+ character(len=50) :: my_mode
+ integer :: ipc
+ real(dp) dotr, doti
+!arrays
+ real(dp) :: gkq_atm(2, self%natom3),gkq(2,self%natom3)
+
+!************************************************************************
+
+ my_mode = "cart"; if (present(mode)) my_mode = mode
+
+
+ do ipc=1,self%natom3
+   call self%apply(eig0nk, npw_k, nspinor, cwave_ket, cwaveprj)
+   
+   call dotprod_g(dotr,doti,istwf_kq,npw_kq*nspinor,2,cwave_bra,self%gh1c(:,:,ipc),&
+     self%mpi_enreg%me_g0,self%mpi_enreg%comm_spinorfft)
+   gkq_atm(:,ipc) = [dotr, doti]
+ end do
+ 
+ call ephtk_gkknu_from_atm(1,1,1,self%natom3/3,gkq_atm,self%phfreq, self%displ_red, gkq)
+
+end function dvqop_get_gkq
 !!***
 subroutine ham_targets_free(self)
 

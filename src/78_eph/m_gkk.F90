@@ -60,6 +60,7 @@ module m_gkk
  use m_eig2d,          only : gkk_t, gkk_init, gkk_ncwrite, gkk_free
  use m_wfd,            only : wfd_init, wfd_t
  use m_getgh1c,        only : getgh1c, rf_transgrid_and_pack, getgh1c_setup
+ use m_symtk,    only : matr3inv
 
  !My added libs
  use m_hdr
@@ -111,19 +112,41 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
 !Local variables ------------------------------
 !scalars
  type(dvqop_t) :: dvqop
+ character(len=500) :: errmsg
  integer :: mpw, ik,spin,ib1,ib2,ikq,npw_k, istwfk,istwfkq, usecprj
+ integer :: iq, ierr, num_fband=0, num_sband=0, branch
  type(wfd_t) :: wfd
+ type(htetra_t) :: htetra
 
- real(dp) :: qpt(3),kpt(3),kqpt(3)
+ real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3)
  integer :: g0_k(3)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
- integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:)
- real(dp),allocatable :: cg_ket(:,:,:)
+ integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:), bz2ibz_indexes(:), fbands(:), sbands(:)
+ real(dp),allocatable :: cg_ket(:,:), cg_bra(:,:),gkq(:,:)
  
+ ABI_CALLOC(fbands, (ebands%mband))
+ ABI_CALLOC(sbands, (ebands%mband))
+
+ print *, "final bands"
+   do ib1 = 1,ebands%mband
+     if (all(ebands%eig(ib1,:,:) > ebands%fermie)) then 
+       num_fband = num_fband + 1
+       fbands(num_fband) = ib1
+     end if
+   end do
+ print *, fbands
+
+ print *, "Starting bands"
+ do ib1 = 1,ebands%mband
+   if (any(fbands == ib1)) cycle
+   num_sband = num_sband + 1
+   sbands(num_sband) = ib1
+ end do
+ print *, sbands
+
  ABI_MALLOC(nband, (ebands%nkpt, ebands%nsppol))
  ABI_MALLOC(bks_mask, (dtset%mband, ebands%nkpt, ebands%nsppol))
  ABI_MALLOC(keep_ur, (dtset%mband, ebands%nkpt, ebands%nsppol))
- !WFD
  ! Read in all wave functions (memory intensive)
  bks_mask = .True.; keep_ur = .False.
  ABI_MALLOC(wfd_istwfk, (ebands%nkpt))
@@ -141,11 +164,10 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  ABI_FREE(nband)
 
  ik = 1
- ib1 = 1
- ib2 = 1
+ ib1 =3 
+ ib2 = 4
  spin = 1
 
- qpt = ebands%kptns(:,2)
  kpt = ebands%kptns(:,ik)
  kqpt = kpt + qpt
  print *, "kqpt"
@@ -157,25 +179,59 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  print *, "cg_ket dims"
  print *, mpw*ebands%nspinor
  print *, dtset%mband
- ABI_MALLOC(cg_ket, (2, mpw*ebands%nspinor, dtset%mband))
- dvqop = dvqop_new(dtset, dvdb, cryst, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf)
- call dvqop%load_vlocal1(qpt,spin,pawfgr,comm)
+ dvqop = dvqop_new(dtset, dvdb, cryst, ifc, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf)
+ print *, "nkpt"
+ print *, ebands%nkpt
  
- call dvqop%setup_spin_kpoint(dtset, cryst, psps, spin, kpt, kqpt, wfd%istwfk(ik), wfd%istwfk(ikq),&
-                              wfd%npwarr(ik), wfd%npwarr(ikq), wfd%kdata(ik)%kg_k, wfd%kdata(ikq)%kg_k)
- 
- ! Copy u_k(G)
- ABI_CHECK(mpw >= npw_k, "mpw < npw_k")
- call wfd%copy_cg(ib1, ikq, spin, cg_ket)
+ rlatt = ebands%kptrlatt
+ call matr3inv(rlatt, klatt)
+ ABI_MALLOC(bz2ibz_indexes, (ebands%nkpt))
+ bz2ibz_indexes = [(ik, ik=1,ebands%nkpt)]
+ call htetra_init(htetra, bz2ibz_indexes, cryst%gprimd, klatt, ebands%kptns, & 
+&                     ebands%nkpt, ebands%kptns, ebands%nkpt, ierr, errmsg, comm, 2)
+ ABI_MALLOC(cg_ket, (2, mpw*ebands%nspinor))
+ ABI_MALLOC(cg_bra, (2, mpw*ebands%nspinor))
+     usecprj = 0
+     ABI_MALLOC(cwaveprj0, (cryst%natom, ebands%nspinor*usecprj))
+     ABI_MALLOC(gkq, (2,dvqop%natom3))
+ do iq=1,3
+   qpt = ebands%kptns(:,iq)
+   call dvqop%setupq(cryst,qpt,spin,pawfgr,comm)
+   print *, "energies"
+   print *, dvqop%phfreq(:)
 
- usecprj = 0
- ABI_MALLOC(cwaveprj0, (cryst%natom, ebands%nspinor*usecprj))
+   do branch = 1,dvqop%natom3
 
- call dvqop%apply(ebands%eig(ib1,ik,spin), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
+   do ik=1,3
+     call dvqop%setup_spin_kpoint(dtset, cryst, psps, spin, kpt, kqpt, wfd%istwfk(ik), wfd%istwfk(ikq),&
+                                  wfd%npwarr(ik), wfd%npwarr(ikq), wfd%kdata(ik)%kg_k, wfd%kdata(ikq)%kg_k)
+     
+     ! Copy u_k(G)
+     ABI_CHECK(mpw >= ebands%npwarr(ik), "mpw < npw_k")
+     ABI_CHECK(mpw >= ebands%npwarr(ikq), "mpw < npw_k")
+     call wfd%copy_cg(ib1, ik, spin, cg_ket)
+     call wfd%copy_cg(ib2, ikq, spin, cg_bra)
+
+
+     !call dvqop%apply(ebands%eig(ib1,ik,spin), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
+     gkq = dvqop%get_gkq(ebands%eig(ib1,ik,spin), wfd%istwfk(ik), wfd%npwarr(ik), wfd%istwfk(ikq),&
+                     wfd%npwarr(ikq), ebands%nspinor, cg_bra, cg_ket, cwaveprj0)
+     print *, gkq*26.2_dp*1000_dp
+   end do !ik
+
+   end do !branch
+
+ end do !iq
  
- print *, ebands%mband
- print *, ebands%nspinor
+
+ 
  ABI_DEALLOCATE(cg_ket)
+ ABI_DEALLOCATE(cg_bra)
+ ABI_DEALLOCATE(gkq)
+ ABI_DEALLOCATE(bz2ibz_indexes)
+ ABI_DEALLOCATE(sbands)
+ ABI_DEALLOCATE(fbands)
+
  call pawcprj_free(cwaveprj0)
 
 end subroutine absrate_ind2

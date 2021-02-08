@@ -8,18 +8,19 @@ occopt 3      # Fermi-Dirac occupation function
               # This corresponds to the physical temperature for electrons
 
 # Definition of the meshes
-ngkpt  24 24 24 # k-mesh used to generate the WFK
+kptopt 3
+ngkpt  4 4 4 # k-mesh used to generate the WFK
 nshiftk 1
 shiftk 0.0 0.0 0.0
 
 ddb_ngqpt 4 4 4          # q-mesh used for the phonons (from DDB)
 
-eph_ngqpt_fine 24 24 24  # Interpolate e-ph matrix elements in q-space
+eph_ngqpt_fine 4 4 4  # Interpolate e-ph matrix elements in q-space
                          # on the same mesh as the k-grid
 
 eph_use_ftinterp 1
 
-getwfk_filepath "AlAs_2o_DS2_WFK"  # Read the dense WFK file
+getwfk_filepath "AlAs_2o_DS3_WFK"  # Read the dense WFK file
 getddb_filepath "AlAs_ddb"       # We need the DDB and DVDB
 getdvdb_filepath "AlAs_dvdb"
 

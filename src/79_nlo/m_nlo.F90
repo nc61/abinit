@@ -92,17 +92,17 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, polarization, scissor, trans
  integer :: my_rank, nproc, tetra_num, num_sband=0, num_fband=0
  integer :: ikpt, isppol, fband, sband, ihash, jtetra, iband, ifband, isband
  integer, parameter :: master=0
- real(dp) :: step
+ real(dp) :: step, ediff
  type(htetra_t) :: htetra
  type(t_tetrahedron) :: tetra
  type(ddkop_t) :: ddkop
  integer :: usecprj
  !WFK
- !type(wfk_t) :: wfk
- !type(MPI_type) :: mpi_enreg
- !type(hdr_type) :: hdr
- !integer :: wfk_unit
- !integer,parameter :: formeig0 = 0
+ type(wfk_t) :: wfk
+ type(MPI_type) :: mpi_enreg
+ type(hdr_type) :: hdr
+ integer :: wfk_unit
+ integer,parameter :: formeig0 = 0
  
 !arrays
  character(len=500) :: msg, errmsg
@@ -111,10 +111,10 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, polarization, scissor, trans
  integer :: isym(4), itim(4)
  integer :: ik, my_start, my_stop
  integer,allocatable :: bz2ibz_indexes(:),sbands(:), fbands(:)
- real(dp) :: klatt(3,3), rlatt(3,3), dweight(4,nw), tweight(4,nw), kk(3)
+ real(dp) :: klatt(3,3), rlatt(3,3), dweight(4,nw), tweight(4,nw), kk(3), weights(nw,2)
  real(dp),allocatable :: energy_fs(:),dweights(:,:,:,:),tweights(:,:)
  real(dp) :: integrand
- real(dp),allocatable :: kbz(:,:), cg_ket(:,:), cg_bra(:,:) 
+ real(dp),allocatable :: kbz(:,:), cg_ket(:,:), cg_bra(:,:), ket_wfd(:,:), ket_wfk(:,:)
  integer,allocatable :: kg_k(:,:)
  complex(dpc),allocatable :: pmat(:,:,:,:,:)
  type(pawcprj_type),allocatable :: cwaveprj0(:,:)
@@ -128,11 +128,37 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, polarization, scissor, trans
 
  mpw = maxval(wfd%npwarr)
  !WFK
- !wfk_unit = get_unit()
- !call wfk_open_read(wfk, wfk_path, formeig0, iomode_from_fname(wfk_path), wfk_unit, xmpi_comm_self)
- !call hdr_copy(wfk%hdr, hdr)
+ if (my_rank == 0) then
+ wfk_unit = get_unit()
+ call wfk_open_read(wfk, "copy_WFK", formeig0, iomode_from_fname(wfk_path), wfk_unit, xmpi_comm_self)
+ call hdr_copy(wfk%hdr, hdr)
+ end if
  !mpw = maxval(hdr%npwarr)
+
+ ABI_ALLOCATE(ket_wfd,(2, mpw))
+ ABI_ALLOCATE(ket_wfk,(2, mpw))
+
+ print *, "mpw"
+ print *, mpw
+
+ print *, "wfd ket"
+ call wfd%copy_cg(4,1,1,ket_wfd)
+ print *, ket_wfd
  
+ if (my_rank == 0) then
+ print *, "wfk ket"
+ call wfk%read_bks(4, 1, 1, xmpio_single, cg_bks=ket_wfk)
+ print *, ket_wfk
+ end if
+
+ print *, "subtraction"
+ print *, ket_wfd - ket_wfk
+
+ print *, "npwarr"
+ print *, wfd%npwarr(1)
+
+ ABI_FREE(ket_wfd)
+ ABI_FREE(ket_wfk)
 
  ! Apply scissor shift to states entirely above the Fermi level
  !TODO: Should not update ebands with scissor shift because subsequent calls will be affected by the shift
@@ -156,6 +182,8 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, polarization, scissor, trans
 
  step = (wmax - wmin)/(nw - 1)
  wmesh = arth(wmin, step, nw)
+ print *, "wmesh"
+ print *, wmesh
 
  rlatt = ebands%kptrlatt
  call matr3inv(rlatt, klatt)
@@ -189,21 +217,21 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, polarization, scissor, trans
      call htetra_init(htetra, bz2ibz_indexes, cryst%gprimd, klatt, ebands%kptns, & 
 &                     ebands%nkpt, ebands%kptns, ebands%nkpt, ierr, errmsg, comm, 2)
      ! precompute weights so that k can be on outer loop so that ddkop%setup_spin_point is only run once per k
-     do isppol = 1,ebands%nsppol   
-       do sband = 1,num_sband
-         isband = sbands(isband)
-         do ifband = 1,num_fband
-           fband = fbands(ifband)
-           energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol) + scissor
-           !TODO: Figure out why this is running more slowly with MPI than single core.
-           call htetra%blochl_weights(energy_fs, wmin, wmax, one, nw, ebands%nkpt, bcorr, tweights(:,:), dweights(sband,fband,:,:), comm) 
-         end do !fband
-       end do !sband
-     end do !isppol
+    !do isppol = 1,ebands%nsppol   
+    !  do sband = 1,num_sband
+    !    isband = sbands(isband)
+    !    do ifband = 1,num_fband
+    !      fband = fbands(ifband)
+    !      !energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol) + scissor
+    !      !TODO: Figure out why this is running more slowly with MPI than single core.
+    !      !call htetra%blochl_weights(energy_fs, wmin, wmax, one, nw, ebands%nkpt, bcorr, tweights(:,:), dweights(sband,fband,:,:), comm) 
+    !    end do !fband
+    !  end do !sband
+    !end do !isppol
      if (ierr /= 0) MSG_ERROR(errmsg)
-
      do isppol = 1,ebands%nsppol   
        do ik = my_start, my_stop 
+         !wfk%read_band_block([1,10], ik, isppol, xmpio_single, kg_k=kg_k, cg_k)
          !WFD
          npw_k = wfd%npwarr(ik); istwf_k = wfd%istwfk(ik)
          call ddkop%setup_spin_kpoint(dtset, cryst, psps, isppol, ebands%kptns(:,ik), istwf_k, npw_k, wfd%kdata(ik)%kg_k)
@@ -213,22 +241,28 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, polarization, scissor, trans
          !call ddkop%setup_spin_kpoint(dtset, cryst, psps, isppol, ebands%kptns(:,ik), istwf_k, npw_k, kg_k)
          do sband = 1,num_sband
            isband = sbands(isband)
+           call wfd%copy_cg(sband,ik,isppol,cg_ket)
            do ifband = 1,num_fband
              fband = fbands(ifband)
 
              !WFD
-             call wfd%copy_cg(sband,ik,isppol,cg_ket)
              call wfd%copy_cg(fband,ik,isppol,cg_bra)
              !WFK
              !call wfk%read_bks(sband, ik, isppol, xmpio_single, cg_bks=cg_ket)
              !call wfk%read_bks(fband, ik, isppol, xmpio_single, cg_bks=cg_bra)
 
-             vk = ddkop%get_vnondiag(ebands%eig(sband,ik,isppol), istwf_k, npw_k, ebands%nspinor, cg_bra, cg_ket, cwaveprj0)
+             vk = ddkop%get_vnondiag(ebands%eig(fband,ik,isppol), istwf_k, npw_k, ebands%nspinor, cg_bra, cg_ket, cwaveprj0)
+             ediff = ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) 
+             !vk = vk*(ediff+scissor)/ediff 
 
              p_fs = polarization(1)*vk(:,1) + polarization(2)*vk(:,2) &
 &               + polarization(3)*vk(:,3)
              integrand =(p_fs(1)**2 + p_fs(2)**2)*(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol))
-             trans_rate = trans_rate + integrand*dweights(sband,fband,:,ik)
+             energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol) + scissor
+             call htetra%get_onewk_wvals(ik, 1, nw, wmesh, one, ebands%nkpt, energy_fs, weights)
+             !print *, "weights"
+             !print *, weights(:,1)
+             trans_rate = trans_rate + integrand*weights(:,1)/(ebands%nkpt)
            end do !fband
          end do !sband
        end do !ik
@@ -508,7 +542,7 @@ subroutine kk_linperm(eps_imag, len_abs, eps_real, wmesh)
  end if
 
  !WFD (WFK?)
- call wfd%free()
+ !call wfd%free()
 
  end subroutine linopt_coefs
 

@@ -53,6 +53,7 @@ module m_gkk
  use m_bz_mesh,        only : findqg0
  use m_cgtools,        only : dotprod_g
  use m_kg,             only : getph
+ use m_numeric_tools,  only : arth
  use m_pawang,         only : pawang_type
  use m_pawrad,         only : pawrad_type
  use m_pawtab,         only : pawtab_type
@@ -113,16 +114,39 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
 !scalars
  type(dvqop_t) :: dvqop
  character(len=500) :: errmsg
- integer :: mpw, ik,spin,ib1,ib2,ikq,npw_k, istwfk,istwfkq, usecprj
+ character(len=fnlen) :: ddkfile_1, ddkfile_2, ddkfile_3, gs_wfkpath
+ integer :: mpw, ik,spin,ib1,ib2,npw_k, istwfk,istwfkq, usecprj
+ integer :: sband, fband, iband, jband
+ integer :: nw
  integer :: iq, ierr, num_fband=0, num_sband=0, branch
+ real(dp) :: wmin, wmax, step 
+ real(dp) :: broadening
  type(wfd_t) :: wfd
  type(htetra_t) :: htetra
+ complex(dpc),allocatable :: pmat(:,:,:,:,:), path_summand(:), path_summand_1(:), path_summand_2(:,:), detuning(:,:), path_sum(:), numerator(:)
 
  real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3)
+ real(dp),allocatable :: energy_fs(:) 
  integer :: g0_k(3)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
- integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:), bz2ibz_indexes(:), fbands(:), sbands(:)
- real(dp),allocatable :: cg_ket(:,:), cg_bra(:,:),gkq(:,:)
+ integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:), bz2ibz_indexes(:), fbands(:), sbands(:), ikq(:)
+ real(dp),allocatable :: cg_sband(:,:), cg_iband(:,:), cg_fband(:,:), gkq(:,:), wmesh(:),weights(:,:,:,:), transrate_integral(:), transrate_total(:), integrand(:), phonon_populations(:)
+
+ ! Load all optical matrix elements
+ ddkfile_1 = "AlAs_2o_DS4_1WF7"
+ ddkfile_2 = "AlAs_2o_DS5_1WF8"
+ ddkfile_3 = "AlAs_2o_DS6_1WF9"
+ gs_wfkpath = wfk0_path 
+
+ call get_opt_matel(pmat, gs_wfkpath, ddkfile_1, ddkfile_2, ddkfile_3, comm)
+
+ nw = 100
+ wmin = zero
+ wmax = 0.1
+ ABI_MALLOC(wmesh, (nw))
+ step = (wmax - wmin)/(nw - 1)
+ wmesh = arth(wmin, step, nw)
+ 
  
  ABI_CALLOC(fbands, (ebands%mband))
  ABI_CALLOC(sbands, (ebands%mband))
@@ -163,25 +187,15 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  ABI_FREE(wfd_istwfk)
  ABI_FREE(nband)
 
- ik = 1
- ib1 =3 
- ib2 = 4
- spin = 1
-
- kpt = ebands%kptns(:,ik)
- kqpt = kpt + qpt
- print *, "kqpt"
- print *, kqpt
-
- call findqg0(ikq, g0_k, kqpt, ebands%nkpt, ebands%kptns, [1,1,1])
-
- call find_mpw(mpw, ebands%kptns, ebands%nsppol, ebands%nkpt, cryst%gmet,dtset%ecut,comm)
- print *, "cg_ket dims"
- print *, mpw*ebands%nspinor
- print *, dtset%mband
- dvqop = dvqop_new(dtset, dvdb, cryst, ifc, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf)
  print *, "nkpt"
  print *, ebands%nkpt
+
+
+ broadening = 0.1
+
+
+ call find_mpw(mpw, ebands%kptns, ebands%nsppol, ebands%nkpt, cryst%gmet,dtset%ecut,comm)
+ dvqop = dvqop_new(dtset, dvdb, cryst, ifc, pawtab, psps, mpi_enreg, mpw, ngfft, ngfftf)
  
  rlatt = ebands%kptrlatt
  call matr3inv(rlatt, klatt)
@@ -189,48 +203,174 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  bz2ibz_indexes = [(ik, ik=1,ebands%nkpt)]
  call htetra_init(htetra, bz2ibz_indexes, cryst%gprimd, klatt, ebands%kptns, & 
 &                     ebands%nkpt, ebands%kptns, ebands%nkpt, ierr, errmsg, comm, 2)
- ABI_MALLOC(cg_ket, (2, mpw*ebands%nspinor))
- ABI_MALLOC(cg_bra, (2, mpw*ebands%nspinor))
+ ABI_MALLOC(cg_sband, (2, mpw*ebands%nspinor))
+ ABI_MALLOC(cg_iband, (2, mpw*ebands%nspinor))
+ ABI_MALLOC(cg_fband, (2, mpw*ebands%nspinor))
      usecprj = 0
      ABI_MALLOC(cwaveprj0, (cryst%natom, ebands%nspinor*usecprj))
      ABI_MALLOC(gkq, (2,dvqop%natom3))
- do iq=1,3
+     ABI_MALLOC(weights, (nw,dvqop%natom3,2,2))
+     ABI_MALLOC(energy_fs, (ebands%nkpt))
+     ABI_MALLOC(detuning, (dvqop%natom3,2))
+     ABI_MALLOC(path_summand_1, (dvqop%natom3,2))
+     ABI_MALLOC(path_summand_2, (dvqop%natom3,2))
+     ABI_MALLOC(path_summand, (dvqop%natom3,2))
+     ABI_CALLOC(path_sum, (dvqop%natom3,2))
+     ABI_MALLOC(numerator, (1))
+     ABI_MALLOC(ikq, (ebands%nkpt))
+     ABI_MALLOC(transrate_integral, (nw))
+     ABI_MALLOC(transrate_total, (nw))
+     ABI_MALLOC(integrand, (nw))
+     ABI_MALLOC(phonon_populations, (dvqop%natom3))
+
+     transrate_total = zero
+     print *, "transrate total"
+     print *, transrate_total
+do spin=1,ebands%nsppol
+ do iq=2,ebands%nkpt
    qpt = ebands%kptns(:,iq)
    call dvqop%setupq(cryst,qpt,spin,pawfgr,comm)
-   print *, "energies"
-   print *, dvqop%phfreq(:)
+   phonon_populations = one/(exp(dvqop%phfreq/(9.89d-4)) - 1)
+   print *, "Phonon pops"
+   print *, phonon_populations
+   do ik=1,ebands%nkpt
+     kpt = ebands%kptns(:,ik)
+     kqpt = kpt + qpt
+     call findqg0(ikq(ik), g0_k, kqpt, ebands%nkpt, ebands%kptns, [1,1,1])
+   end do !ik
+   do ik=1,ebands%nkpt-1
+     !print *, "k"
+     !print *, ik
 
-   do branch = 1,dvqop%natom3
+     call dvqop%setup_spin_kpoint(dtset, cryst, psps, spin, kpt, kqpt, wfd%istwfk(ik), wfd%istwfk(ikq(ik)),&
+                                  wfd%npwarr(ik), wfd%npwarr(ikq(ik)), wfd%kdata(ik)%kg_k, wfd%kdata(ikq(ik))%kg_k)
 
-   do ik=1,3
-     call dvqop%setup_spin_kpoint(dtset, cryst, psps, spin, kpt, kqpt, wfd%istwfk(ik), wfd%istwfk(ikq),&
-                                  wfd%npwarr(ik), wfd%npwarr(ikq), wfd%kdata(ik)%kg_k, wfd%kdata(ikq)%kg_k)
-     
-     ! Copy u_k(G)
-     ABI_CHECK(mpw >= ebands%npwarr(ik), "mpw < npw_k")
-     ABI_CHECK(mpw >= ebands%npwarr(ikq), "mpw < npw_k")
-     call wfd%copy_cg(ib1, ik, spin, cg_ket)
-     call wfd%copy_cg(ib2, ikq, spin, cg_bra)
+         do ib1=1,num_sband
+          ! print *, "sband"
+          ! print *, sband
+           sband = sbands(ib1)
+           ! Copy u_k(G)
+           ABI_CHECK(mpw >= ebands%npwarr(ik), "mpw < npw_k")
+           call wfd%copy_cg(ib1, ik, spin, cg_sband)
+           do ib2=1,num_fband
+             fband = fbands(ib2)
+             if (fband > 8) cycle
+             energy_fs = ebands%eig(fband,ikq,spin) - ebands%eig(sband,ik,spin)
+             if (wmax + maxval(dvqop%phfreq) .lt. minval(energy_fs)) cycle
+
+             do branch=1,dvqop%natom3
+               call htetra%get_onewk_wvals(ik, 0, nw, wmesh, one, ebands%nkpt, energy_fs - dvqop%phfreq(branch), weights(:,branch,2,1))
+               call htetra%get_onewk_wvals(ik, 0, nw, wmesh, one, ebands%nkpt, energy_fs + dvqop%phfreq(branch), weights(:,branch,1,1))
+             end do
+
+             !if (all(abs(weights(:,1)) < 1.0d-12)) cycle
+
+             ABI_CHECK(mpw >= ebands%npwarr(ikq(ik)), "mpw < npw_k")
+             call wfd%copy_cg(fband, ikq(ik), spin, cg_fband)
+
+             path_sum = zero
+               do iband=1,ebands%mband - 2
+                 call wfd%copy_cg(sband, ik, spin, cg_iband)
+
+                 phonon_energies(:,1) = dvqop%phfreq
+                 phonon_energies(:,2) = -dvqop%phfreq
+
+                 !Phonon first
+                 gkq = dvqop%get_gkq(ebands%eig(iband,ikq(ik),spin), wfd%istwfk(ik), wfd%npwarr(ik), wfd%istwfk(ikq(ik)),&
+                     wfd%npwarr(ikq(ik)), ebands%nspinor, cg_iband, cg_sband, cwaveprj0)
+                 detuning = ebands%eig(iband,ikq(ik),spin) - ebands%eig(sband,ik,spin) + phonon_energies + (0,0.00001)
+                 numerator = pmat(fband,iband,ikq(ik),1,spin)*CMPLX(gkq(1,:), gkq(2,:), kind=dpc)
+                 path_summand_1 = numerator/detuning
+                 if (any(abs(path_summand_1) > 1.0d4)) then
+                   print *, "sband"
+                   print *, sband
+                   print *, "fband"
+                   print *, fband
+                   print *, "iband"
+                   print *, iband
+                   print *, "qpt"
+                   print *, qpt
+                   print *, "ik"
+                   print *, ik
+                   print *, "ikq"
+                   print *, ikq(ik)
+                   print *, "kpt"
+                   print *, kpt
+                   print *, "Ei"
+                   print *, ebands%eig(iband,ikq(ik),spin)
+                   print *, "Eo"
+                   print *, ebands%eig(sband,ik,spin)
+                   print *, "Path summand"
+                   print *, path_summand_1
+                   print *, "Large summand"
+                   print *, "Numerator"
+                   print *, numerator
+                   print *, "Denominator"
+                   print *, detuning
+                   print *, "weights"
+                   print *, weights(:,dvqop%natom3,2,1)
+                 end if
 
 
-     !call dvqop%apply(ebands%eig(ib1,ik,spin), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
-     gkq = dvqop%get_gkq(ebands%eig(ib1,ik,spin), wfd%istwfk(ik), wfd%npwarr(ik), wfd%istwfk(ikq),&
-                     wfd%npwarr(ikq), ebands%nspinor, cg_bra, cg_ket, cwaveprj0)
-     print *, gkq*26.2_dp*1000_dp
+                 !Phonon last
+                 gkq = dvqop%get_gkq(ebands%eig(fband,ikq(ik),spin), wfd%istwfk(ik), wfd%npwarr(ik), wfd%istwfk(ikq(ik)),&
+                     wfd%npwarr(ikq(ik)), ebands%nspinor, cg_fband, cg_iband, cwaveprj0)
+                 detuning = ebands%eig(iband,ik,spin) - ebands%eig(fband,ikq(ik),spin)  + phonon_energies + (0,0.00001)
+                 numerator = CMPLX(gkq(1,:), gkq(2,:), kind=dpc)*pmat(iband,sband,ikq(ik),1,spin)
+                 path_summand_2 = numerator/detuning
+
+                 path_summand = path_summand_1 + path_summand_2
+                !print *, "Path summand"
+                !print *, path_summand
+                 path_sum = path_sum + path_summand
+
+               end do !iband
+
+               !print *, "Path sum squared"
+               integrand = abs(path_sum)**2*(ebands%occ(sband,ik,spin) - ebands%occ(fband,ikq(ik), spin))
+              !print *, "integrand"
+              !print *, integrand
+               transrate_integral = matmul(integrand*phonon_populations, transpose(weights(:,:,1,1)))
+              !print *, "weights"
+              !print *, weights(:,:,1,1)
+               !print *, "trans rate"
+               !print *, transrate_integral
+               transrate_total = transrate_total + transrate_integral
+              !print *, "total trans rate"
+              !print *, transrate_total
+           end do !fband
+         end do !sband
+       end do !spin
    end do !ik
 
-   end do !branch
 
  end do !iq
+ print *, "total trans"
+ print *, transrate_total
  
 
  
- ABI_DEALLOCATE(cg_ket)
- ABI_DEALLOCATE(cg_bra)
+ call htetra%free
+ ABI_DEALLOCATE(cg_sband)
+ ABI_DEALLOCATE(cg_iband)
+ ABI_DEALLOCATE(cg_fband)
  ABI_DEALLOCATE(gkq)
  ABI_DEALLOCATE(bz2ibz_indexes)
  ABI_DEALLOCATE(sbands)
  ABI_DEALLOCATE(fbands)
+ ABI_FREE(wmesh)
+ ABI_FREE(weights)
+ ABI_FREE(energy_fs)
+ ABI_FREE(detuning)
+ ABI_FREE(path_summand)
+ ABI_FREE(path_summand_1)
+ ABI_FREE(path_summand_2)
+ ABI_FREE(path_sum)
+ ABI_FREE(ikq)
+ ABI_FREE(integrand)
+ ABI_FREE(transrate_integral)
+ ABI_FREE(transrate_total)
+ ABI_FREE(phonon_populations)
 
  call pawcprj_free(cwaveprj0)
 
@@ -334,9 +474,9 @@ subroutine absrate_ind(wfk0_path,wfq_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands_
  atm_mass = cryst%amu
 
  ! Load all optical matrix elements
- ddkfile_1 = "gs_ddko_DS4_1WF7"
- ddkfile_2 = "gs_ddko_DS5_1WF8"
- ddkfile_3 = "gs_ddko_DS6_1WF9"
+ ddkfile_1 = "AlAs_2o_DS4_1WF7"
+ ddkfile_2 = "AlAs_2o_DS5_1WF8"
+ ddkfile_3 = "AlAs_20_DS6_1WF9"
  gs_wfk = wfk0_path
 
  call get_opt_matel(pmat, gs_wfk, ddkfile_1, ddkfile_2, ddkfile_3, comm)

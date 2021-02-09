@@ -123,7 +123,9 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  real(dp) :: broadening
  type(wfd_t) :: wfd
  type(htetra_t) :: htetra
- complex(dpc),allocatable :: pmat(:,:,:,:,:), path_summand(:), path_summand_1(:), path_summand_2(:,:), detuning(:,:), path_sum(:), numerator(:)
+ complex(dpc),allocatable :: pmat(:,:,:,:,:), path_summand_plus(:), path_summand_1_plus(:), path_summand_1_minus(:), path_summand_2_plus(:) 
+ complex(dpc),allocatable :: numerator(:), detuning_plus(:), detuning_minus(:), path_summand_2_minus(:), path_sum_minus(:)
+ complex(dpc),allocatable :: path_sum_plus(:), path_summand_minus(:)
 
  real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3)
  real(dp),allocatable :: energy_fs(:) 
@@ -131,6 +133,7 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
  integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:), bz2ibz_indexes(:), fbands(:), sbands(:), ikq(:)
  real(dp),allocatable :: cg_sband(:,:), cg_iband(:,:), cg_fband(:,:), gkq(:,:), wmesh(:),weights(:,:,:,:), transrate_integral(:), transrate_total(:), integrand(:), phonon_populations(:)
+ real(dp),allocatable :: phonon_energies(:,:)
 
  ! Load all optical matrix elements
  ddkfile_1 = "AlAs_2o_DS4_1WF7"
@@ -211,17 +214,23 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
      ABI_MALLOC(gkq, (2,dvqop%natom3))
      ABI_MALLOC(weights, (nw,dvqop%natom3,2,2))
      ABI_MALLOC(energy_fs, (ebands%nkpt))
-     ABI_MALLOC(detuning, (dvqop%natom3,2))
-     ABI_MALLOC(path_summand_1, (dvqop%natom3,2))
-     ABI_MALLOC(path_summand_2, (dvqop%natom3,2))
-     ABI_MALLOC(path_summand, (dvqop%natom3,2))
-     ABI_CALLOC(path_sum, (dvqop%natom3,2))
-     ABI_MALLOC(numerator, (1))
+     ABI_MALLOC(detuning_plus, (dvqop%natom3))
+     ABI_MALLOC(detuning_minus, (dvqop%natom3))
+     ABI_MALLOC(path_summand_1_plus, (dvqop%natom3))
+     ABI_MALLOC(path_summand_1_minus, (dvqop%natom3))
+     ABI_MALLOC(path_summand_2_plus, (dvqop%natom3))
+     ABI_MALLOC(path_summand_2_minus, (dvqop%natom3))
+     ABI_MALLOC(path_summand_plus, (dvqop%natom3))
+     ABI_MALLOC(path_summand_minus, (dvqop%natom3))
+     ABI_CALLOC(path_sum_plus, (dvqop%natom3))
+     ABI_CALLOC(path_sum_minus, (dvqop%natom3))
+     ABI_MALLOC(numerator, (dvqop%natom3))
      ABI_MALLOC(ikq, (ebands%nkpt))
      ABI_MALLOC(transrate_integral, (nw))
      ABI_MALLOC(transrate_total, (nw))
      ABI_MALLOC(integrand, (nw))
      ABI_MALLOC(phonon_populations, (dvqop%natom3))
+     ABI_MALLOC(phonon_energies, (dvqop%natom3,2))
 
      transrate_total = zero
      print *, "transrate total"
@@ -268,7 +277,8 @@ do spin=1,ebands%nsppol
              ABI_CHECK(mpw >= ebands%npwarr(ikq(ik)), "mpw < npw_k")
              call wfd%copy_cg(fband, ikq(ik), spin, cg_fband)
 
-             path_sum = zero
+             path_sum_plus = zero
+             path_sum_minus = zero
                do iband=1,ebands%mband - 2
                  call wfd%copy_cg(sband, ik, spin, cg_iband)
 
@@ -278,10 +288,15 @@ do spin=1,ebands%nsppol
                  !Phonon first
                  gkq = dvqop%get_gkq(ebands%eig(iband,ikq(ik),spin), wfd%istwfk(ik), wfd%npwarr(ik), wfd%istwfk(ikq(ik)),&
                      wfd%npwarr(ikq(ik)), ebands%nspinor, cg_iband, cg_sband, cwaveprj0)
-                 detuning = ebands%eig(iband,ikq(ik),spin) - ebands%eig(sband,ik,spin) + phonon_energies + (0,0.00001)
                  numerator = pmat(fband,iband,ikq(ik),1,spin)*CMPLX(gkq(1,:), gkq(2,:), kind=dpc)
-                 path_summand_1 = numerator/detuning
-                 if (any(abs(path_summand_1) > 1.0d4)) then
+
+                 detuning_plus = ebands%eig(iband,ikq(ik),spin) - ebands%eig(sband,ik,spin) + dvqop%phfreq + (0,0.0000001)
+                 detuning_minus = ebands%eig(iband,ikq(ik),spin) - ebands%eig(sband,ik,spin) - dvqop%phfreq + (0,0.0000001)
+
+                 path_summand_1_plus = numerator/detuning_plus
+                 path_summand_1_minus = numerator/detuning_minus
+
+                 if (any(abs(path_summand_1_plus) > 1.0d4)) then
                    print *, "sband"
                    print *, sband
                    print *, "fband"
@@ -301,12 +316,12 @@ do spin=1,ebands%nsppol
                    print *, "Eo"
                    print *, ebands%eig(sband,ik,spin)
                    print *, "Path summand"
-                   print *, path_summand_1
+                   print *, path_summand_1_plus
                    print *, "Large summand"
                    print *, "Numerator"
                    print *, numerator
                    print *, "Denominator"
-                   print *, detuning
+                   print *, detuning_plus
                    print *, "weights"
                    print *, weights(:,dvqop%natom3,2,1)
                  end if
@@ -315,29 +330,28 @@ do spin=1,ebands%nsppol
                  !Phonon last
                  gkq = dvqop%get_gkq(ebands%eig(fband,ikq(ik),spin), wfd%istwfk(ik), wfd%npwarr(ik), wfd%istwfk(ikq(ik)),&
                      wfd%npwarr(ikq(ik)), ebands%nspinor, cg_fband, cg_iband, cwaveprj0)
-                 detuning = ebands%eig(iband,ik,spin) - ebands%eig(fband,ikq(ik),spin)  + phonon_energies + (0,0.00001)
                  numerator = CMPLX(gkq(1,:), gkq(2,:), kind=dpc)*pmat(iband,sband,ikq(ik),1,spin)
-                 path_summand_2 = numerator/detuning
 
-                 path_summand = path_summand_1 + path_summand_2
-                !print *, "Path summand"
-                !print *, path_summand
-                 path_sum = path_sum + path_summand
+                 detuning_plus = ebands%eig(iband,ik,spin) - ebands%eig(fband,ikq(ik),spin) + dvqop%phfreq + (0,0.0000001)
+                 detuning_minus = ebands%eig(iband,ik,spin) - ebands%eig(fband,ikq(ik),spin) - dvqop%phfreq + (0,0.0000001)
+
+                 path_summand_2_plus = numerator/detuning_plus
+                 path_summand_2_minus = numerator/detuning_minus
+
+                 path_summand_plus = path_summand_1_plus + path_summand_2_plus
+                 path_summand_minus = path_summand_1_plus + path_summand_2_plus
+
+                 path_sum_plus = path_sum_plus + path_summand_plus
+                 path_sum_minus = path_sum_minus + path_summand_minus
 
                end do !iband
 
                !print *, "Path sum squared"
-               integrand = abs(path_sum)**2*(ebands%occ(sband,ik,spin) - ebands%occ(fband,ikq(ik), spin))
-              !print *, "integrand"
-              !print *, integrand
-               transrate_integral = matmul(integrand*phonon_populations, transpose(weights(:,:,1,1)))
-              !print *, "weights"
-              !print *, weights(:,:,1,1)
-               !print *, "trans rate"
-               !print *, transrate_integral
+               transrate_integral = (matmul(abs(path_sum_plus)**2,transpose(weights(:,:,1,1))) &
+&                                 + matmul(abs(path_sum_minus)*phonon_populations, transpose(weights(:,:,1,1)))) &
+&                                   *(ebands%occ(ik, sband, spin) - ebands%occ(ikq, fband, spin))
+
                transrate_total = transrate_total + transrate_integral
-              !print *, "total trans rate"
-              !print *, transrate_total
            end do !fband
          end do !sband
        end do !spin
@@ -361,16 +375,22 @@ do spin=1,ebands%nsppol
  ABI_FREE(wmesh)
  ABI_FREE(weights)
  ABI_FREE(energy_fs)
- ABI_FREE(detuning)
- ABI_FREE(path_summand)
- ABI_FREE(path_summand_1)
- ABI_FREE(path_summand_2)
- ABI_FREE(path_sum)
+ ABI_FREE(detuning_plus)
+ ABI_FREE(detuning_minus)
+ ABI_FREE(path_summand_plus)
+ ABI_FREE(path_summand_minus)
+ ABI_FREE(path_summand_1_plus)
+ ABI_FREE(path_summand_1_minus)
+ ABI_FREE(path_summand_2_plus)
+ ABI_FREE(path_summand_2_minus)
+ ABI_FREE(path_sum_plus)
+ ABI_FREE(path_sum_minus)
  ABI_FREE(ikq)
  ABI_FREE(integrand)
  ABI_FREE(transrate_integral)
  ABI_FREE(transrate_total)
  ABI_FREE(phonon_populations)
+ ABI_FREE(phonon_energies)
 
  call pawcprj_free(cwaveprj0)
 

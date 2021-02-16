@@ -53,7 +53,7 @@ module m_gkk
  use m_bz_mesh,        only : findqg0
  use m_cgtools,        only : dotprod_g
  use m_kg,             only : getph
- use m_numeric_tools,  only : arth
+ use m_numeric_tools,  only : arth 
  use m_pawang,         only : pawang_type
  use m_pawrad,         only : pawrad_type
  use m_pawtab,         only : pawtab_type
@@ -61,7 +61,7 @@ module m_gkk
  use m_eig2d,          only : gkk_t, gkk_init, gkk_ncwrite, gkk_free
  use m_wfd,            only : wfd_init, wfd_t
  use m_getgh1c,        only : getgh1c, rf_transgrid_and_pack, getgh1c_setup
- use m_symtk,          only : matr3inv
+ use m_symtk,          only : matr3inv, mati3inv
 
  !My added libs
  use m_hdr
@@ -118,19 +118,20 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  integer :: branch, ib1, ib2, ik, iq, spin
  integer :: sband, fband, iband
  integer :: mpw, my_start, my_stop, num_fband=0, num_sband=0, nw
- integer :: ierr 
+ integer :: ierr, isym
  real(dp) :: wmin, wmax, step 
  type(htetra_t) :: htetra
  type(wfd_t) :: wfd
 
  !arrays
+ complex(dpc) :: pmat_1(3), pmat_2(3), pmat_mag2
  complex(dpc),allocatable :: pmat(:,:,:,:,:), numerator(:), detuning_plus(:), detuning_minus(:)
  complex(dpc),allocatable :: path_summand_plus(:), path_summand_1_plus(:), path_summand_2_plus(:), path_sum_plus(:)
  complex(dpc),allocatable :: path_summand_minus(:), path_summand_1_minus(:), path_summand_2_minus(:), path_sum_minus(:)
  integer :: g0_k(3)
  integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:), bz2ibz_indexes(:), fbands(:), sbands(:), ikq(:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
- real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3)
+ real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3),symrec(3,3)
  real(dp),allocatable :: energy_fs(:) 
  real(dp),allocatable :: cg_sband(:,:), cg_iband(:,:), cg_fband(:,:), gkq(:,:), wmesh(:),weights(:,:,:,:), transrate_integral(:), transrate_total(:), phonon_populations(:)
  real(dp),allocatable :: phonon_energies(:,:)
@@ -141,7 +142,60 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  ddkfile_3 = "AlAs_2o_DS6_1WF9"
  gs_wfkpath = wfk0_path 
 
+ !pmat = pmat(band 1, band 2, k, direction, spin)
  call get_opt_matel(pmat, gs_wfkpath, ddkfile_1, ddkfile_2, ddkfile_3, comm)
+
+ ik = 2
+ isym = 6
+ iband = 1
+ fband = 3
+ sband = 4
+ print *, "kpt"
+ print *, ebands%kptns(:,ik)
+ print *, "Energy"
+ print *, ebands%eig(iband,ik,1)
+ print *, "symrel_cart"
+ print *, cryst%symrel_cart(:,:,isym)
+
+
+ print *, ebands%kptns(:,ik)
+ print *, "Pmat from matrix"
+ print *, pmat(iband,fband,ik, :, 1)
+ call matr3inv(cryst%symrel_cart(:,:,isym), symrec(:,:))
+ symrec = transpose(symrec)
+ print *, "sym"
+ print *, symrec
+ print *, "Equiv k point"
+ kpt = cryst%symrec(:,1,isym)*ebands%kptns(1,ik) + cryst%symrec(:,2,isym)*ebands%kptns(2,ik) + cryst%symrec(:,3, isym)*ebands%kptns(3,ik)
+ print *, kpt
+ print *, "pmat_rotated"
+ pmat_1 = cryst%symrel_cart(:,1,isym)*pmat(iband,fband,ik, 1, 1)+ cryst%symrel_cart(:,2,isym)*pmat(iband,fband,ik, 2, 1) + cryst%symrel_cart(:,3,isym)*pmat(iband,fband,ik, 3, 1)
+ pmat_2 = cryst%symrel_cart(:,1,isym)*pmat(iband,sband,ik, 1, 1)+ cryst%symrel_cart(:,2,isym)*pmat(iband,sband,ik, 2, 1) + cryst%symrel_cart(:,3,isym)*pmat(iband,sband,ik, 3, 1)
+ pmat_mag2 = abs(pmat_1(1))**2 + abs(pmat_2(1))**2
+ print *, "pmat_1"
+ print *, pmat_1
+ print *, "pmat_2"
+ print *, pmat_2
+ print *, "pmat mag^2"
+ print *, pmat_mag2
+ do ik=1,ebands%nkpt
+   if (norm2(ebands%kptns(:,ik) - kpt) < 1.0d-12) exit
+ end do
+ print *, "equiv"
+ print *, ik
+ print *, "Energy at equiv"
+ print *, ebands%eig(iband,ik,1)
+ print *, "pmat full 1"
+ print *, pmat(iband,fband,ik, :, 1)
+ print *, "pmat full 2"
+ print *, pmat(sband,fband,ik, :, 1)
+ print *, "pmat full mag^2"
+ print *, abs(pmat(iband,fband,ik, 1, 1))**2 + abs(pmat(iband,sband,ik, 1, 1))**2
+ print *, "check"
+ print *, ebands%kptns(:,ik)
+
+
+
 
  ! Define (hard coded) optical mesh
  nw = 100
@@ -234,6 +288,8 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  call xmpi_split_work(ebands%nkpt, comm, my_start, my_stop)
  transrate_total = zero
  self_energy = (0.0, 0.0)
+ my_start = 1
+ my_stop = 1
  do spin=1,ebands%nsppol
    do iq=my_start,my_stop
      qpt = ebands%kptns(:,iq)

@@ -33,11 +33,13 @@ module m_gkk
  use m_dvdb
  use m_fft
  use m_hamiltonian
+ use m_krank
  use m_pawcprj
  use m_wfk
  use m_nctk
  use m_dtfil
  use m_dvq
+ use m_sort
 #ifdef HAVE_NETCDF
  use netcdf
 #endif
@@ -111,6 +113,7 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
 !Local variables ------------------------------
 !scalars
  type(dvqop_t) :: dvqop
+ type(krank_t) :: krank
  character(len=500) :: errmsg
  character(len=fnlen) :: ddkfile_1, ddkfile_2, ddkfile_3, gs_wfkpath
  complex(dpc) :: self_energy
@@ -118,7 +121,8 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  integer :: branch, ib1, ib2, ik, iq, spin
  integer :: sband, fband, iband
  integer :: mpw, my_start, my_stop, num_fband=0, num_sband=0, nw
- integer :: ierr, isym
+ integer :: ierr, isym, sym, krank_prev=-2
+ integer :: rank(cryst%nsym), iperm(cryst%nsym)
  real(dp) :: wmin, wmax, step 
  type(htetra_t) :: htetra
  type(wfd_t) :: wfd
@@ -131,7 +135,7 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  integer :: g0_k(3)
  integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:), bz2ibz_indexes(:), fbands(:), sbands(:), ikq(:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
- real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3),symrec(3,3)
+ real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3),symrec(3,3), kpt_new(3)
  real(dp),allocatable :: energy_fs(:) 
  real(dp),allocatable :: cg_sband(:,:), cg_iband(:,:), cg_fband(:,:), gkq(:,:), wmesh(:),weights(:,:,:,:), transrate_integral(:), transrate_total(:), phonon_populations(:)
  real(dp),allocatable :: phonon_energies(:,:)
@@ -144,57 +148,31 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
 
  !pmat = pmat(band 1, band 2, k, direction, spin)
  call get_opt_matel(pmat, gs_wfkpath, ddkfile_1, ddkfile_2, ddkfile_3, comm)
+ print *, cryst%symrel_cart(:,:,:)
+ 
 
- ik = 2
- isym = 6
+ ik = 6
+ isym = 6 
  iband = 1
  fband = 3
  sband = 4
- print *, "kpt"
- print *, ebands%kptns(:,ik)
- print *, "Energy"
- print *, ebands%eig(iband,ik,1)
- print *, "symrel_cart"
- print *, cryst%symrel_cart(:,:,isym)
+ krank = krank_new(ebands%nkpt, ebands%kptns)
+ iperm = [(isym, isym=1,cryst%nsym)]
+ print *, "iperm"
+ print *, iperm
 
-
- print *, ebands%kptns(:,ik)
- print *, "Pmat from matrix"
- print *, pmat(iband,fband,ik, :, 1)
- call matr3inv(cryst%symrel_cart(:,:,isym), symrec(:,:))
- symrec = transpose(symrec)
- print *, "sym"
- print *, symrec
- print *, "Equiv k point"
- kpt = cryst%symrec(:,1,isym)*ebands%kptns(1,ik) + cryst%symrec(:,2,isym)*ebands%kptns(2,ik) + cryst%symrec(:,3, isym)*ebands%kptns(3,ik)
- print *, kpt
- print *, "pmat_rotated"
- pmat_1 = cryst%symrel_cart(:,1,isym)*pmat(iband,fband,ik, 1, 1)+ cryst%symrel_cart(:,2,isym)*pmat(iband,fband,ik, 2, 1) + cryst%symrel_cart(:,3,isym)*pmat(iband,fband,ik, 3, 1)
- pmat_2 = cryst%symrel_cart(:,1,isym)*pmat(iband,sband,ik, 1, 1)+ cryst%symrel_cart(:,2,isym)*pmat(iband,sband,ik, 2, 1) + cryst%symrel_cart(:,3,isym)*pmat(iband,sband,ik, 3, 1)
- pmat_mag2 = abs(pmat_1(1))**2 + abs(pmat_2(1))**2
- print *, "pmat_1"
- print *, pmat_1
- print *, "pmat_2"
- print *, pmat_2
- print *, "pmat mag^2"
- print *, pmat_mag2
- do ik=1,ebands%nkpt
-   if (norm2(ebands%kptns(:,ik) - kpt) < 1.0d-12) exit
+ do isym=1,cryst%nsym
+   kpt = ebands%kptns(:,ik)
+   symrec = cryst%symrec(:,:,isym)
+   kpt_new = matmul(symrec, kpt)
+   rank(isym) = krank%get_rank(kpt_new)
  end do
- print *, "equiv"
- print *, ik
- print *, "Energy at equiv"
- print *, ebands%eig(iband,ik,1)
- print *, "pmat full 1"
- print *, pmat(iband,fband,ik, :, 1)
- print *, "pmat full 2"
- print *, pmat(sband,fband,ik, :, 1)
- print *, "pmat full mag^2"
- print *, abs(pmat(iband,fband,ik, 1, 1))**2 + abs(pmat(iband,sband,ik, 1, 1))**2
- print *, "check"
- print *, ebands%kptns(:,ik)
-
-
+ call sort_int(cryst%nsym, rank, iperm)
+ do isym=1,cryst%nsym
+   if (rank(isym) == krank_prev) cycle
+   sym = iperm(isym)
+   krank_prev = rank(isym)
+ end do
 
 
  ! Define (hard coded) optical mesh

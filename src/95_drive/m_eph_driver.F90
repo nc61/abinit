@@ -67,7 +67,7 @@ module m_eph_driver
  use m_pawfgr,          only : pawfgr_type, pawfgr_init, pawfgr_destroy
  use m_phgamma,         only : eph_phgamma
  use m_efmas,           only : efmasdeg_free_array, efmasval_free_array, efmas_ncread
- use m_gkk,             only : eph_gkk, eph_gkq, ncwrite_v1qnu, absrate_ind, absrate_ind2
+ use m_gkk,             only : eph_gkk, ncwrite_v1qnu, absrate_ind2
  use m_phpi,            only : eph_phpi
  use m_sigmaph,         only : sigmaph, test_phrotation
  use m_pspini,          only : pspini

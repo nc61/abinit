@@ -116,26 +116,26 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  type(krank_t) :: krank
  character(len=500) :: errmsg
  character(len=fnlen) :: ddkfile_1, ddkfile_2, ddkfile_3, gs_wfkpath
- complex(dpc) :: self_energy
+ complex(dpc) :: self_energy, pmat_ibz(3)
  integer :: npw_k, istwfk,istwfkq, usecprj
  integer :: branch, ib1, ib2, ik, iq, spin
  integer :: sband, fband, iband
  integer :: mpw, my_start, my_stop, num_fband=0, num_sband=0, nw
  integer :: ierr, isym, sym, krank_prev=-2
- integer :: rank(cryst%nsym), iperm(cryst%nsym)
+ integer :: rank(cryst%nsym), iperm(cryst%nsym), kpt_rank, ik_ibz
  real(dp) :: wmin, wmax, step 
  type(htetra_t) :: htetra
  type(wfd_t) :: wfd
 
  !arrays
- complex(dpc) :: pmat_1(3), pmat_2(3), pmat_mag2
+ complex(dpc) :: pmat_1(3), pmat_2(3), pmat_mag2, pol_rotated(3,cryst%nsym), pol(3)
  complex(dpc),allocatable :: pmat(:,:,:,:,:), numerator(:), detuning_plus(:), detuning_minus(:)
  complex(dpc),allocatable :: path_summand_plus(:), path_summand_1_plus(:), path_summand_2_plus(:), path_sum_plus(:)
  complex(dpc),allocatable :: path_summand_minus(:), path_summand_1_minus(:), path_summand_2_minus(:), path_sum_minus(:)
  integer :: g0_k(3)
  integer,allocatable :: wfd_istwfk(:),nband(:,:), kg_k(:,:), bz2ibz_indexes(:), fbands(:), sbands(:), ikq(:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
- real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3),symrec(3,3), kpt_new(3)
+ real(dp) :: qpt(3),kpt(3),kqpt(3),klatt(3,3),rlatt(3,3),symrec(3,3), kpt_new(3), symrel_cart(3,3)
  real(dp),allocatable :: energy_fs(:) 
  real(dp),allocatable :: cg_sband(:,:), cg_iband(:,:), cg_fband(:,:), gkq(:,:), wmesh(:),weights(:,:,:,:), transrate_integral(:), transrate_total(:), phonon_populations(:)
  real(dp),allocatable :: phonon_energies(:,:)
@@ -151,26 +151,53 @@ subroutine absrate_ind2(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc
  print *, cryst%symrel_cart(:,:,:)
  
 
- ik = 6
+ ik_ibz = 20
  isym = 6 
- iband = 1
- fband = 3
+ iband = 2
+ fband = 5
  sband = 4
  krank = krank_new(ebands%nkpt, ebands%kptns)
  iperm = [(isym, isym=1,cryst%nsym)]
- print *, "iperm"
- print *, iperm
+ pmat_ibz = pmat(iband, fband, ik_ibz,:,1)
+
+ pol = [(1,0),(0,0),(0,0)]
+ do isym=1,cryst%nsym
+   call matr3inv(cryst%symrel_cart(:,:,isym), symrel_cart)
+   pol_rotated(:,isym) = matmul(transpose(cryst%symrel_cart(:,:,isym)), pol)
+ end do !isym
+
 
  do isym=1,cryst%nsym
-   kpt = ebands%kptns(:,ik)
+   kpt = ebands%kptns(:,ik_ibz)
    symrec = cryst%symrec(:,:,isym)
    kpt_new = matmul(symrec, kpt)
    rank(isym) = krank%get_rank(kpt_new)
  end do
  call sort_int(cryst%nsym, rank, iperm)
  do isym=1,cryst%nsym
+   print *, "rank"
+   print *, rank(isym)
    if (rank(isym) == krank_prev) cycle
    sym = iperm(isym)
+   
+   print *, "sym"
+   print *, transpose(cryst%symrel_cart(:,:,sym))
+   kpt = matmul(cryst%symrec(:,:,sym), ebands%kptns(:,ik_ibz))
+   print *, "equiv k point"
+   print *, kpt
+
+   do ik=1,ebands%nkpt
+     kpt_rank = krank%get_rank(ebands%kptns(:,ik))
+     if (kpt_rank == rank(isym)) exit 
+   end do
+   print *, "ik"
+   print *, ik
+   print *,ebands%eig(iband, ik, 1)
+   print *,ebands%eig(fband, ik, 1)
+   print *, pol_rotated(:,sym)
+   print *, dot_product(pol, pmat(iband,fband,ik,:,1))
+   print *, dot_product(pol_rotated(:,sym), pmat_ibz)
+
    krank_prev = rank(isym)
  end do
 

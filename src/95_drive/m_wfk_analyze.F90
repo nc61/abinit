@@ -334,8 +334,8 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
   !end if
   !call xmpi_barrier(comm)
 
-   call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 500, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.03028893129_dp , 1.5_dp, comm, dtset, psps, wfk0_path)
-
+   call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.038_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 500, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.03391488548_dp , 2.0_dp, comm, dtset, psps, wfk0_path)
  case (WFK_TASK_KPTS_ERANGE)
    call sigtk_kpts_in_erange(dtset, cryst, ebands, psps, pawtab, dtfil%filnam_ds(4), comm)
 

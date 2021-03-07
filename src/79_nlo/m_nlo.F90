@@ -259,6 +259,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, pol, scissor, trans_rate, wm
 
  max_occ = two/ebands%nspinor
  nkpt_fullbz = ebands%nshiftk*ebands%kptrlatt(1,1)*ebands%kptrlatt(2,2)*ebands%kptrlatt(3,3)
+ call identk(ebands%kptns, ebands%nkpt, nkpt_fullbz, crystal%nsym, timrev + 1, crystal%symrec, crystal%symafm, kbz, ktab, ktabi, ktabo, nkbz)
 
  if (ebands%kptopt == 3) then !all k points are inequivalent
     do isppol = 1,ebands%nsppol   

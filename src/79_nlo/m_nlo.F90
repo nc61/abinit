@@ -6,7 +6,7 @@
 !! DFT calculations of linear and nonlinear optical properties
 !!
 !! COPYRIGHT
-!!  Copyright (C) 2002-2020 ABINIT group (MVeithen,MB,LB)
+!!  Copyright (C) 2002-2020 ABINIT group (NC)
 !!  This file is distributed under the terms of the
 !!  GNU General Public License, see ~abinit/COPYING
 !!  or http://www.gnu.org/copyleft/gpl.txt .
@@ -97,7 +97,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, pol, scissor, trans_rate, wm
  integer :: isppol, sband, fband, iband 
  integer :: isym, itim, timrev, idir, jdir
  integer, parameter :: master=0
- real(dp) :: step, population_diff, renorm_factor, max_occ 
+ real(dp) :: step, population_diff, renorm_factor, max_occ
  type(htetra_t) :: htetra
  type(ddkop_t) :: ddkop 
  integer :: usecprj
@@ -107,7 +107,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, pol, scissor, trans_rate, wm
  complex(dpc) :: vk(3,ebands%mband,ebands%mband), vk_sf(3), transrate_tensor(nw,3,3), pol_rot(3), transrate_times_polrot(3),integrand(nw,3,3)
  integer :: ik, my_start, my_stop, iw
  real(dp) :: klatt(3,3), rlatt(3,3), weights(nw,2), energy_fs(ebands%nkpt)
- real(dp) ::  v_bks(2,3)
+ real(dp) ::  v_bks(2,3), sym_inv_trans(3,3)
  real(dp),allocatable :: cg_ket(:,:), cg_bra(:,:)
  complex(dpc),allocatable :: pol_rotated(:,:)
  type(pawcprj_type),allocatable :: cwaveprj0(:,:)
@@ -143,7 +143,8 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, pol, scissor, trans_rate, wm
 
  do itim = 0,timrev
    do isym=1,cryst%nsym
-     pol_rotated(:,cryst%nsym*itim + isym) = (1-2*itim)*matmul(transpose(cryst%symrel_cart(:,:,isym)), pol)
+     call matr3inv(cryst%symrel_cart(:,:,isym), sym_inv_trans)
+     pol_rotated(:,cryst%nsym*itim + isym) = (1-2*itim)*matmul(sym_inv_trans, pol)
    end do !isym
  end do !itim
  print *, "pol rotated"
@@ -176,6 +177,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, pol, scissor, trans_rate, wm
             v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, ebands%nspinor, cg_bra, mode="cart")
             ! renorm? Just seems to make errors larger.
             renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
+            renorm_factor = one
             vk(:,sband,fband) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
           end do !fband
         end do !sband
@@ -234,135 +236,197 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, nw, pol, scissor, trans_rate, wm
 end subroutine trans_rate_1pa
 
 !TODO: Fix this function, currently doesn't work
-subroutine trans_rate_d2pa(bcorr, cryst, ebands, nw, pmat, pol_1, pol_2, scissor, total_trans_rate, wmin, wmax, wmesh, comm)
+subroutine trans_rate_d2pa(bcorr, cryst, ebands, nw, pol1, pol2, scissor, trans_rate, wmin, wmax, wmesh1, w2, comm, &
+&                         dtset, pawtab, psps, wfd)
 
 !Arguments ------------------------------------
 !scalars
- integer,intent(in) :: comm, bcorr
+ integer,intent(in) :: bcorr, comm, nw
  real(dp),intent(in) :: scissor, wmin, wmax
  type(crystal_t),intent(in) :: cryst
  type(ebands_t),intent(inout) :: ebands
+ type(dataset_type),intent(in) :: dtset
+ type(pseudopotential_type),intent(in) :: psps
+ type(wfd_t),intent(in) :: wfd
+ type(pawtab_type),intent(in) :: pawtab(psps%ntypat*psps%usepaw)
 
 !arrays
- complex(dpc),intent(in) :: pmat(:,:,:,:,:), pol_1(3), pol_2(3)
- integer,intent(in) :: nw
- real(dp),intent(out) :: total_trans_rate(nw)
- real(dp),intent(out) :: wmesh(nw)
+ complex(dpc),intent(in) :: pol1(3), pol2(3)
+ real(dp),intent(out) :: trans_rate(nw)
+ real(dp),intent(out) :: wmesh1(nw)
+ real(dp),intent(in) :: w2
 
 !Local variables ------------------------------
 !scalars
- integer :: ierr
- integer :: my_rank, nproc, tetra_num, num_fband=0, num_sband=0
- integer :: fband, sband, ik
- integer :: ikpt, isppol, iband, ifband, isband, iw
+ integer :: ierr 
+ integer :: mpw, npw_k, istwf_k
+ integer :: my_rank, nproc, mband
+ integer :: isppol, sband, fband, iband 
+ integer :: isym, itim, timrev, idir, jdir, kdir, ldir
  integer, parameter :: master=0
- real(dp) :: step, detuning, trans_rate
- type(t_tetrahedron) :: tetra
+ real(dp) :: step, population_diff, renorm_factor, max_occ, energy_is
+ type(htetra_t) :: htetra
+ type(ddkop_t) :: ddkop 
+ integer :: usecprj
  
 !arrays
- character(len=500) :: msg, errmsg
- complex(dpc) :: integrand_fs, int_summand
- integer :: fbands(20), sbands(20)
- integer,allocatable :: bz2ibz_indexes(:) 
- real(dp) :: klatt(3,3), rlatt(3,3)
- real(dp) :: energy_is
- complex(dpc) :: p_is_1, p_is_2, p_fi_1, p_fi_2
- real(dp) :: integrand, detuning_k
- real(dp),allocatable :: energy_fs(:), dweights(:,:), tweights(:,:)
-
+ character(len=500) :: msg 
+ complex(dpc) :: vk(3,ebands%mband,ebands%mband), vk_sf(3), transrate_tensor(nw,3,3,3,3),pol1_rot(3),pol2_rot(3),transrate_times_polrot(3),summand(nw,3,3)
+ complex(dpc) :: path_sum(nw,3,3), integrand(nw,3,3,3,3), tens_1c(nw,3,3,3), tens_2c(nw,3,3), tens_3c(nw,3), vk_is(3), vk_fi(3)
+ integer :: ik, my_start, my_stop, iw
+ real(dp) :: klatt(3,3), rlatt(3,3), weights(nw,2), energy_fs(ebands%nkpt)
+ real(dp) ::  v_bks(2,3), sym_inv_trans(3,3)
+ real(dp),allocatable :: cg_ket(:,:), cg_bra(:,:)
+ complex(dpc),allocatable :: pol1_rotated(:,:), pol2_rotated(:,:)
+ type(pawcprj_type),allocatable :: cwaveprj0(:,:)
 !************************************************************************
  my_rank = xmpi_comm_rank(comm)
  nproc   = xmpi_comm_size(comm) 
- 
+
+ mpw = maxval(wfd%npwarr)
+ print *, "mpw"
+ print *, mpw
+
  step = (wmax - wmin)/(nw - 1)
- wmesh = arth(wmin, step, nw)
+ wmesh1 = arth(wmin, step, nw)
 
+ rlatt = ebands%kptrlatt
+ call matr3inv(rlatt, klatt)
 
-!TODO: Make the band selection match that in the 1PA function
-print *, "Starting bands"
-do sband = 1,ebands%mband
-  if (all(ebands%occ(sband,:,:) == 0)) cycle
-  num_sband = num_sband + 1
-  print *, sband
-  sbands(num_sband) = sband
-end do
+ ABI_CALLOC(cg_ket, (2, mpw*ebands%nspinor))
+ ABI_CALLOC(cg_bra, (2, mpw*ebands%nspinor))
+ usecprj = 0
+ ABI_MALLOC(cwaveprj0, (cryst%natom, ebands%nspinor*usecprj))
 
-print *, "Final bands"
-do fband = 1,ebands%mband
-  if (all(ebands%occ(fband,:,:) /= 0)) cycle
-  num_fband = num_fband + 1
-  print *, fband
-  fbands(num_fband) = fband
-end do
+ call xmpi_split_work(ebands%nkpt,comm,my_start,my_stop)
 
- do isppol = 1,ebands%nsppol
-   do iband = 1,ebands%mband
-     if (all(ebands%eig(iband,:,isppol) > ebands%fermie)) then 
-       write(std_out, '(a,i2)') "Scissor shift applied to band", iband
-       ebands%eig(iband,:,isppol) = ebands%eig(iband,:,isppol) + scissor 
-     end if
-   end do
- end do
+!!WFD
+ ddkop = ddkop_new(dtset, cryst, pawtab, psps, wfd%mpi_enreg, mpw, wfd%ngfft)
+ call ebands_apply_scissors(ebands, scissor)
 
+ timrev = kpts_timrev_from_kptopt(ebands%kptopt)
+ ABI_MALLOC(pol1_rotated, (3, cryst%nsym*(timrev + 1)))
+ ABI_MALLOC(pol2_rotated, (3, cryst%nsym*(timrev + 1)))
+
+ do itim = 0,timrev
+   do isym=1,cryst%nsym
+     call matr3inv(cryst%symrel_cart(:,:,isym), sym_inv_trans)
+     pol1_rotated(:,cryst%nsym*itim + isym) = (1-2*itim)*matmul(cryst%symrel_cart(:,:,isym), pol1)
+     pol2_rotated(:,cryst%nsym*itim + isym) = (1-2*itim)*matmul(cryst%symrel_cart(:,:,isym), pol2)
+   end do !isym
+ end do !itim
+
+ htetra = tetra_from_kptrlatt(cryst, ebands%kptopt, ebands%kptrlatt, ebands%nshiftk, ebands%shiftk, ebands%nkpt, ebands%kptns, comm, msg, ierr)
+ if (ierr /= 0) MSG_ERROR(msg)
+ mband = ebands%mband
+ max_occ = two/ebands%nspinor
+
+ transrate_tensor = zero
  if (ebands%kptopt == 3) then !all k points are inequivalent
-   if (my_rank == master) then
-     call wrtout(std_out, "Generating inequivalent tetrahedra across the full Brillouin zone", "COLL")  
-   end if
-     
-     rlatt = ebands%kptrlatt
-     call matr3inv(rlatt, klatt)
-     ABI_ALLOCATE(bz2ibz_indexes, (ebands%nkpt))
-     ABI_ALLOCATE(dweights, (nw, ebands%nkpt))
-     ABI_ALLOCATE(tweights, (nw, ebands%nkpt))
-     ABI_ALLOCATE(energy_fs, (ebands%nkpt))
-     bz2ibz_indexes = [(ikpt, ikpt=1,ebands%nkpt)]
-     
-     
-     
-     call init_tetra(bz2ibz_indexes, cryst%gprimd, klatt, ebands%kptns, ebands%nkpt, tetra, ierr, errmsg, comm)
-     if (ierr /= 0) MSG_ERROR(errmsg)
+   ! do nothing
+ else if (ebands%kptopt == 1) then
+    do isppol = 1,ebands%nsppol   
+      do ik = my_start,my_stop
+        !vk(3,mband,mband) are matrix elements between bands at given ik (in irreducible wedge) 
+        vk = zero
+        npw_k = wfd%npwarr(ik); istwf_k = wfd%istwfk(ik)
+        ! ik loop outside so this is only called once per k point
+        call ddkop%setup_spin_kpoint(dtset, cryst, psps, isppol, ebands%kptns(:,ik), istwf_k, npw_k, wfd%kdata(ik)%kg_k)
+        ! Precompute all needed matrix elements in IBZ
+        do sband = 1,mband
+          call wfd%copy_cg(sband,ik,isppol,cg_ket)
+          call ddkop%apply(ebands%eig(sband,ik,isppol), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
+          do fband = sband,mband       
+            ! Don't bother computing if they have the same population
+            !if (abs(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)) .lt. 1.0d-12) cycle
+            call wfd%copy_cg(fband,ik,isppol,cg_bra)
+            v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, ebands%nspinor, cg_bra, mode="cart")
+            ! renorm? Just seems to make errors larger.
+            renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
+            renorm_factor = one
+            vk(:,sband,fband) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
+            vk(:,fband,sband) = conjg(vk(:,sband,fband))
+          end do !fband
+        end do !sband
+        
+        ! Loop over bands on outside allows us to only compute tetrahedron weights once
+        do sband = 1,mband
+          ! fband loop starts as sband to avoid double counting transitions
+          do fband = sband,mband
+            population_diff = ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)
+            ! Population filter again
+            if (abs(population_diff) .lt. 1.0d-12) cycle
+            energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol)
+            ! get weights
+            call htetra%get_onewk_wvals(ik, 0, nw, wmesh1 + w2, max_occ, ebands%nkpt, energy_fs, weights)
+            ! filter based on weights
+            if (all(abs(weights(:,1)) .lt. 1.0d-12)) cycle
+            path_sum = zero
+            do iband=1,mband
+              energy_is = ebands%eig(sband,ik,isppol) - ebands%eig(iband,ik,isppol)
+              vk_is = vk(:,iband,sband)
+              vk_fi = vk(:,fband,iband)
+              do idir = 1,3
+                do jdir = 1,3
+                  summand(:,idir,jdir) = vk_fi(idir)*vk_is(jdir)/(energy_is - wmesh1 + (0,0.01))  &
+&                                        + vk_fi(jdir)*vk_is(idir)/(energy_is - w2 + (0,0.01))
+                end do !idir
+              end do !jdir
+              path_sum = path_sum + summand
+            end do !iband
+            integrand = zero
+            do idir=1,3
+              do jdir=1,3
+                do kdir=1,3
+                  do ldir=1,3
+                    integrand(:,idir,jdir,kdir,ldir) = conjg(path_sum(:,idir,jdir))*path_sum(:,kdir,ldir)*weights(:,1)
+                  end do ! ldir
+                end do !kdir
+              end do !jdir
+            end do !idir
+            transrate_tensor = transrate_tensor + integrand*population_diff*ebands%wtk(ik)
+          end do !fband
+        end do !sband
+      end do !ik
+    end do !isppol
+    call xmpi_sum(transrate_tensor, comm, ierr)
+    if (ierr /= 0) MSG_ERROR("Error in xmpi sum for transition rate")
+ end if 
+ 
+ trans_rate = zero
+ do itim=0,timrev
+   do isym=1,cryst%nsym
+     pol1_rot = pol1_rotated(:,cryst%nsym*itim + isym)
+     pol2_rot = pol2_rotated(:,cryst%nsym*itim + isym)
+     print *, "pol1 rot"
+     print *, pol1_rot
+     print *, "pol2 rot"
+     print *, pol2_rot
 
-     total_trans_rate = zero
-     do isppol = 1,ebands%nsppol
-       do isband = 1,num_sband
-         sband = sbands(isband)
-         do ifband = 1,num_fband
-           fband = fbands(ifband)
-           energy_fs = ebands%eig(fband, :, isppol) - ebands%eig(sband, :, isppol)
-           call tetra_blochl_weights(tetra, energy_fs, two*wmin, two*wmax, one, nw, ebands%nkpt, bcorr, tweights, dweights, comm) 
-           do ik=1,ebands%nkpt
-               do iw = 1,nw
-                 if (dweights(iw,ik) == zero) cycle
-               	 int_summand = zero 
-                 do iband = 1,ebands%mband
-                   p_is_1 = pol_1(1)*pmat(iband,sband,ik,1,isppol) + pol_1(2)*pmat(iband,sband,ik,2,isppol) + pol_1(3)*pmat(iband,sband,ik,3,isppol)
-                   p_is_2 = pol_2(1)*pmat(iband,sband,ik,1,isppol) + pol_2(2)*pmat(iband,sband,ik,2,isppol) + pol_2(3)*pmat(iband,sband,ik,3,isppol)
-                   p_fi_1 = pol_1(1)*pmat(fband,iband,ik,1,isppol) + pol_1(2)*pmat(fband,iband,ik,2,isppol) + pol_1(3)*pmat(fband,iband,ik,3,isppol)
-                   p_fi_2 = pol_2(1)*pmat(fband,iband,ik,1,isppol) + pol_2(2)*pmat(fband,iband,ik,2,isppol) + pol_2(3)*pmat(fband,iband,ik,3,isppol)
+     tens_1c = zero
+     do idir=1,3
+       tens_1c = tens_1c + transrate_tensor(:,:,:,:,idir)*pol1_rot(idir)
+     end do
+     tens_2c = zero
+     do idir=1,3
+       tens_2c = tens_2c + tens_1c(:,:,:,idir)*pol1_rot(idir)
+     end do
+     tens_3c = zero
+     do idir=1,3
+       tens_3c = tens_3c + tens_2c(:,:,idir)*pol2_rot(idir)
+     end do
+     do idir=1,3
+       trans_rate = trans_rate + tens_3c(:,idir)*pol2_rot(idir)
+     end do
+   end do !isym
+ end do !itim
 
-                   detuning_k = ebands%eig(iband, ik, isppol) - ebands%eig(sband, ik, isppol) &
-&                               - wmesh(iw)
-                   int_summand = int_summand + (p_is_1*p_fi_2 + p_is_2*p_fi_1)/(detuning_k + (0, 0.01))
-                 end do !iband
-                 integrand = abs(int_summand)**2*(ebands%occ(sband,ik,isppol) &
-&                                                          - ebands%occ(fband,ik,isppol))
-                 total_trans_rate(iw) = total_trans_rate(iw) + integrand*dweights(iw,ik)
-               end do !iw
-           end do !ik
-         end do !ifband
-       end do !isband
-     end do !isppol
-
-     call xmpi_sum(total_trans_rate, comm, ierr)
-     total_trans_rate = total_trans_rate/four
-     if (ierr /= 0) MSG_ERROR("Error in xmpi sum for transition rate")
- call destroy_tetra(tetra)
- ABI_DEALLOCATE(bz2ibz_indexes)
- ABI_DEALLOCATE(energy_fs)
- ABI_DEALLOCATE(dweights)
- ABI_DEALLOCATE(tweights)
- end if
-
+ call htetra%free
+ call pawcprj_free(cwaveprj0)
+ ABI_FREE(pol1_rotated)
+ ABI_FREE(pol2_rotated)
+ ABI_FREE(cg_ket)
+ ABI_FREE(cg_bra)
 
 end subroutine trans_rate_d2pa
 
@@ -487,52 +551,83 @@ subroutine kk_linperm(eps_imag, len_abs, eps_real, wmesh)
 
  end subroutine linopt_coefs
 
- subroutine d2pa_coefs(alpha2_d, bcorr, cryst, ebands, fname_root, nw, pmat, pol_1, pol_2, scissor, wmin, wmax, wmesh, comm)
+subroutine d2pa_coefs(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1, pol2, scissor, w1min, w1max, w2, comm, dtset, psps, wfk0_path)
 
 !Arguments ------------------------------------
 !scalars
  integer,intent(in) :: comm, bcorr
- real(dp),intent(in) :: scissor, wmin, wmax
+ real(dp),intent(in) :: scissor, w1min, w1max, w2
  type(crystal_t),intent(in) :: cryst
  type(ebands_t),intent(inout) :: ebands
+ type(dataset_type),intent(in) :: dtset
+ type(pseudopotential_type),intent(in) :: psps
+ character(len=*),intent(in) :: wfk0_path
+ type(pawtab_type),intent(in) :: pawtab(psps%ntypat*psps%usepaw)
 
 !arrays
- complex(dpc),intent(in) :: pmat(:,:,:,:,:), pol_1(3), pol_2(3)
+ complex(dpc),intent(in) :: pol1(3), pol2(3)
  integer,intent(in) :: nw
- real(dp),intent(out) :: alpha2_d(nw)
- real(dp),intent(out) :: wmesh(nw)
  character(len=*),intent(in) :: fname_root
+ integer,intent(in) :: ngfft(18)
 
 !Local variables ------------------------------
 !scalars
  integer :: ierr, funit, iw
  integer :: my_rank, nproc 
  integer, parameter :: master=0
- real(dp) :: step
+ real(dp) :: step, wmesh(nw)
+ type(wfd_t) :: wfd
  
 !arrays
  character(len=500) :: msg, errmsg, fname
- real(dp) :: trans_rate(nw)
+ real(dp) :: trans_rate(nw), alpha2_d(nw)
+ logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
+ integer,allocatable :: wfd_istwfk(:),nband(:,:)
 
 !************************************************************************
  my_rank = xmpi_comm_rank(comm)
  nproc   = xmpi_comm_size(comm) 
  
- step = (wmax - wmin)/(nw - 1)
- wmesh = arth(wmin, step, nw)
+ step = (w1max - w1min)/(nw - 1)
+ wmesh = arth(w1min, step, nw)
 
- call trans_rate_d2pa(bcorr, cryst, ebands, nw, pmat, pol_1, pol_2, scissor, trans_rate, wmin, wmax, wmesh, comm)
- alpha2_d = 4_dp/(1**2*137**2*wmesh**3)*trans_rate
- alpha2_d(1) = 0
- print *, "alpha 2"
- print *, alpha2_d
+ ABI_MALLOC(nband, (ebands%nkpt, ebands%nsppol))
+ ABI_MALLOC(bks_mask, (dtset%mband, ebands%nkpt, ebands%nsppol))
+ ABI_MALLOC(keep_ur, (dtset%mband, ebands%nkpt, ebands%nsppol))
+ !WFD
+ ! Read in all wave functions (memory intensive)
+ bks_mask = .True.; keep_ur = .False.
+ !WFK
+ !bks_mask = .False.; keep_ur = .False.
+ ABI_MALLOC(wfd_istwfk, (ebands%nkpt))
+ wfd_istwfk = 1
+ nband = dtset%mband
+
+ !WFD
+ call wfd_init(wfd, cryst, pawtab, psps, keep_ur, dtset%mband, nband, ebands%nkpt, ebands%nsppol, bks_mask,&
+               dtset%nspden, ebands%nspinor, dtset%ecut, dtset%ecutsm, dtset%dilatmx, wfd_istwfk, ebands%kptns, ngfft,&
+               dtset%nloalg, dtset%prtvol, dtset%pawprtvol, comm)
+ call wfd%read_wfk(wfk0_path, iomode_from_fname(wfk0_path))
+ !WFK
+ ! Either init with bks mas False (don't allocate any memory but still use wfd info) or don't initialize at all
+
+ ABI_FREE(bks_mask)
+ ABI_FREE(keep_ur)
+ ABI_FREE(wfd_istwfk)
+ ABI_FREE(nband)
+
+ call trans_rate_d2pa(bcorr, cryst, ebands, nw, pol1, pol2, scissor, trans_rate, w1min, w1max, wmesh, w2, comm, &
+&                     dtset, pawtab, psps, wfd)
+ alpha2_d = 4_dp/(3.5**2*137**2*wmesh*w2**2)*trans_rate
+ alpha2_d(1) = zero
+ alpha2_d = alpha2_d*29.36_dp
 
  if (my_rank == master) then
    fname = trim(fname_root)//'_d2pa.out'
    funit = get_unit()
    open(funit, file = fname)
    do iw = 1,nw
-     write(funit, *) wmesh(iw), alpha2_d(iw)
+     write(funit, *) 26.2*(w2 + wmesh(iw)), alpha2_d(iw)
    end do
    close(funit)
  end if

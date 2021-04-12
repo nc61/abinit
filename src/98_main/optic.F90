@@ -110,7 +110,7 @@ program optic
 
 !Local variables-------------------------------
  integer,parameter :: formeig0=0,formeig1=1,tim_rwwf=0,master=0
- integer :: fform,finunt,ep_ntemp,itemp
+ integer :: fform,finunt,ep_ntemp,itemp,funit
  integer :: bantot,bdtot0_index,bdtot_index
  integer :: headform,ierr,ii,jj,ikpt,isym
  integer :: isppol,mband,nomega,natom,nband1,nsym
@@ -147,7 +147,7 @@ program optic
  real(dp), ABI_CONTIGUOUS pointer :: outeig(:)
  complex(dpc),allocatable :: pmat(:,:,:,:,:)
  logical :: use_ncevk(0:3)
- character(len=fnlen) :: filnam,wfkfile,ddkfile_1,ddkfile_2,ddkfile_3,filnam_out, epfile
+ character(len=fnlen) :: filnam,wfkfile,ddkfile_1,ddkfile_2,ddkfile_3,filnam_out, epfile, fname
  character(len=fnlen) :: infiles(0:3)
 ! for the moment this is imposed by the format in linopt.f and nlinopt.f
  character(len=256) :: prefix,tmp_radix
@@ -697,8 +697,15 @@ program optic
  call wrtout(std_out," optic : Call pmat2cart","COLL")
 
  call pmat2cart(eigen11,eigen12,eigen13,mband,nkpt,nsppol,pmat,rprimd)
- call pmat_renorm(fermie, eigen0, mband, nkpt, nsppol, pmat, scissor)
+ !call pmat_renorm(fermie, eigen0, mband, nkpt, nsppol, pmat, scissor)
 
+ if (my_rank == master) then
+   fname = "matrix_elements.out"
+   funit = get_unit()
+   open(funit, file = fname)
+   write(funit, *) pmat 
+   close(funit)
+ end if
 
 !---------------------------------------------------------------------------------
 ! Perform calculations

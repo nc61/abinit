@@ -744,10 +744,9 @@ subroutine print_matrix_elements(cryst, ebands, ngfft, comm, dtset, pawtab, psps
  integer :: usecprj, intmeth
  
 !arrays
- character(len=500) :: msg 
- complex(dpc) :: vk(3,ebands%mband,ebands%mband), vk_sf(3), transrate_tensor(nw,3,3), pol_rot(3), transrate_times_polrot(3),integrand(nw,3,3)
- integer :: ik, my_start, my_stop, iw
- real(dp) :: klatt(3,3), rlatt(3,3), weights(nw,2), energy_fs(ebands%nkpt)
+ character(len=500) :: msg, fname 
+ complex(dpc), allocatable :: vk(:,:,:), v(:,:,:,:,:)
+ integer :: ik, my_start, my_stop, funit
  real(dp) ::  v_bks(2,3), sym_inv_trans(3,3)
  real(dp),allocatable :: cg_ket(:,:), cg_bra(:,:)
  complex(dpc),allocatable :: pol_rotated(:,:)
@@ -802,6 +801,9 @@ subroutine print_matrix_elements(cryst, ebands, ngfft, comm, dtset, pawtab, psps
 !!WFD
  ddkop = ddkop_new(dtset, cryst, pawtab, psps, wfd%mpi_enreg, mpw, wfd%ngfft)
 
+ ABI_MALLOC(vk, (mband, mband, 3))
+ ABI_MALLOC(v, (mband, mband, ebands%nkpt, 3, ebands%nsppol))
+
     do isppol = 1,ebands%nsppol   
       !For debugging purposes, set the vk array to NaN to make sure we're actually assigning
       vk = anan/anan
@@ -817,15 +819,19 @@ subroutine print_matrix_elements(cryst, ebands, ngfft, comm, dtset, pawtab, psps
           call ddkop%apply(ebands%eig(sband,ik,isppol), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
           do fband = sband,mband       
             ! Don't bother computing if they have the same population
-            if (abs(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)) .lt. 1.0d-12) cycle
+            !if (abs(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)) .lt. 1.0d-12) cycle
             call wfd%copy_cg(fband,ik,isppol,cg_bra)
             v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, ebands%nspinor, cg_bra, mode="cart")
+            print *, sband, fband, ik
+            print *, v_bks
             ! renorm? Just seems to make errors larger.
-            renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
-            !renorm_factor = one
-            vk(:,sband,fband) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
+            !renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
+            renorm_factor = one
+            vk(sband,fband,:) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
+            vk(fband,sband,:) = conjg(vk(sband,fband,:))
           end do !fband
         end do !sband
+      v(:,:,ik,:,isppol) = vk
       end do !ik
     end do !isppol
  
@@ -833,7 +839,18 @@ subroutine print_matrix_elements(cryst, ebands, ngfft, comm, dtset, pawtab, psps
   ABI_FREE(cg_ket)
   ABI_FREE(cg_bra)
 
-end subroutine trans_rate_1pa
+ if (my_rank == master) then
+   fname = "matrix_elements.out"
+   funit = get_unit()
+   open(funit, file = fname)
+   write(funit, *) v
+   close(funit)
+ end if
+
+  ABI_FREE(v)
+  ABI_FREE(vk)
+end subroutine print_matrix_elements
+
 end module m_nlo
 
 

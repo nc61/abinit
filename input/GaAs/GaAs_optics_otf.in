@@ -1,0 +1,51 @@
+# Crystalline AlAs: computation of the intrinsic mobility
+
+# General input for e-ph computations
+optdriver 8   # Enter e-ph code
+wfk_task "wfk_optics"   
+occopt 1      # Fermi-Dirac occupation function
+              # This corresponds to the physical temperature for electrons
+# Definition of the meshes
+nshiftk 1
+shiftk 0.0 0.0 0.0
+ngkpt 8 8 8 
+kptopt 3 
+nband 12 
+nspinor 1
+
+
+getwfk_filepath "GaAs_otfo_DS3_WFK"  # Read the dense WFK file
+
+
+ acell   3*10.60
+ diemac 12.0
+ ecut 15.0             # This is also too low
+ ixc 1 
+ natom  2  nbdbuf 2
+ ntypat  2
+ rprim   0 .5 .5  .5 0 .5  .5 .5 0
+ xred 3*0.00d0 3*0.25d0
+ tnons 72*0.0
+ typat  1 2  tolwfr  1.e-20
+ znucl  31 33
+
+ pp_dirpath "$ABI_PSPDIR"
+ #pseudos "Ga.psp8, As.psp8" 
+ #pseudos "PseudosHGH_pwteter/31ga.3.hgh,PseudosHGH_pwteter/33as.5.hgh" 
+ pseudos "PseudosTM_pwteter/31ga.pspnc,PseudosTM_pwteter/33as.pspnc" 
+
+#%%<BEGIN TEST_INFO>
+#%% [setup]
+#%% executable = abinit
+#%% test_chain =  teph4mob_1.in, teph4mob_2.in, teph4mob_3.in, teph4mob_4.in, teph4mob_5.in, teph4mob_6.in, teph4mob_7.in
+#%% [files]
+#%% files_to_test =
+#%%   teph4mob_5.out, tolnlines= 80, tolabs=  600, tolrel=  6.000e-03
+#%% [paral_info]
+#%% max_nprocs = 4
+#%% [extra_info]
+#%% authors = G. Brunin, M. Giantomassi
+#%% keywords = NC, DFPT, EPH, RTA
+#%% description =
+#%%   E-ph for mobility in semiconductors
+#%%<END TEST_INFO>

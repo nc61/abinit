@@ -327,24 +327,13 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
  select case (dtset%wfk_task)
 
  case (WFK_TASK_FULLBZ)
-  !! Read wfk0_path and build WFK in full BZ.
-  !if (my_rank == master) then
-  !  wfkfull_path = dtfil%fnameabo_wfk; if (dtset%iomode == IO_MODE_ETSF) wfkfull_path = nctk_ncify(wfkfull_path)
-  !  call wfk_tofullbz(wfk0_path, dtset, psps, pawtab, wfkfull_path)
-  !end if
-  !call xmpi_barrier(comm)
+  ! Read wfk0_path and build WFK in full BZ.
+  if (my_rank == master) then
+    wfkfull_path = dtfil%fnameabo_wfk; if (dtset%iomode == IO_MODE_ETSF) wfkfull_path = nctk_ncify(wfkfull_path)
+    call wfk_tofullbz(wfk0_path, dtset, psps, pawtab, wfkfull_path)
+  end if
+  call xmpi_barrier(comm)
 
-   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.02565_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
-   call d2pa_coefs(1, cryst, ebands, "GaAs", ngfftc, 100, pawtab, &
-        [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
-&       0.02565_dp , zero, 0.1_dp, 0.03_dp, comm, dtset, psps, wfk0_path)
-   !call linopt_coefs(1, 0, cryst, ebands, "Si", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.035_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
-   !call linopt_coefs(1, 0, cryst, ebands, "Si", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
-   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 500, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.03391488548_dp , 2.0_dp, comm, dtset, psps, wfk0_path)
-   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
-   !call linopt_coefs(1, 0, cryst, ebands, "C", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0437_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
-   !call linopt_coefs(1, 0, cryst, ebands, "CdTe", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.029_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
-   !call linopt_coefs(1, 0, cryst, ebands, "CdTe", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0422_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
  case (WFK_TASK_KPTS_ERANGE)
    call sigtk_kpts_in_erange(dtset, cryst, ebands, psps, pawtab, dtfil%filnam_ds(4), comm)
 
@@ -405,6 +394,27 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
 
    call paw_pwaves_lmn_free(paw_onsite)
    ABI_FREE(paw_onsite)
+
+ case (WFK_TASK_OPTICS)
+
+   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.02565_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 2000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.025_dp , two, comm, dtset, psps, wfk0_path)
+!   call d2pa_coefs(1, cryst, ebands, "GaAs", ngfftc, 100, pawtab, &
+!&        [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
+!&       0.02565_dp , zero, 0.3_dp, 0.03_dp, comm, dtset, psps, wfk0_path)
+!   call d2pa_coefs(1, cryst, ebands, "GaAs", ngfftc, 500, pawtab, &
+!&        [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
+!&       0.02565_dp , zero, 0.3_dp, -one, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "Si", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.035_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "Si", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 500, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.03391488548_dp , 2.0_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "C", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0437_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "CdTe", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.029_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   !call linopt_coefs(1, 0, cryst, ebands, "CdTe", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0422_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
+   call print_matrix_elements(cryst, ebands, ngfftc, comm, dtset, pawtab, psps, wfk0_path)
+ 
+
 
  !case ("paw_aeden")
 

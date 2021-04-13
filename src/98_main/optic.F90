@@ -700,10 +700,10 @@ program optic
  !call pmat_renorm(fermie, eigen0, mband, nkpt, nsppol, pmat, scissor)
 
  if (my_rank == master) then
-   fname = "matrix_elements.out"
+   fname = "matrix_elements_optic.out"
    funit = get_unit()
    open(funit, file = fname)
-   write(funit, *) pmat 
+   write(funit, *) pmat(1:10,1:10,:,:,:) 
    close(funit)
  end if
 

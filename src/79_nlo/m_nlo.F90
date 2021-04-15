@@ -49,6 +49,7 @@ module m_nlo
  use m_io_tools, only : get_unit, iomode_from_fname
  use m_numeric_tools, only: arth, simpson
  use m_symtk,    only : matr3inv
+ use m_special_funcs,  only : gaussian
  use m_time, only : timein
  use m_pawtab,         only : pawtab_type
  use m_fftcore, only : get_kg
@@ -300,6 +301,7 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  integer :: my_rank, nproc, mband
  integer :: isppol, sband, fband, iband 
  integer :: isym, itim, timrev, idir, jdir, kdir, ldir
+ integer :: intmeth, nkpt_fbz
  integer, parameter :: master=0
  real(dp) :: step, population_diff, renorm_factor, max_occ, energy_is
  type(htetra_t) :: htetra
@@ -311,6 +313,7 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  character(len=500) :: msg 
  complex(dpc) :: vk(3,ebands%mband,ebands%mband), vk_sf(3), transrate_tensor(nw,3,3,3,3),pol1_rot(3),pol2_rot(3),transrate_times_polrot(3),summand(nw,3,3)
  complex(dpc) :: path_sum(nw,3,3), integrand(nw,3,3,3,3), tens_1c(nw,3,3,3), tens_2c(nw,3,3), tens_3c(nw,3), vk_is(3), vk_fi(3)
+ complex(dpc) :: detuning_1(nw), detuning_2(nw)
  integer :: ik, my_start, my_stop, iw, nsym
  real(dp) :: klatt(3,3), rlatt(3,3), weights(nw,2), energy_fs(ebands%nkpt)
  real(dp) ::  v_bks(2,3), sym_inv_trans(3,3), wmesh2(nw)
@@ -324,11 +327,6 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  nproc   = xmpi_comm_size(comm) 
 
  call xmpi_split_work(ebands%nkpt,comm,my_start,my_stop)
- print *, "my start"
- print *, my_start
- print *, "my stop"
- print *, my_stop
-
 
  ABI_MALLOC(nband, (ebands%nkpt, ebands%nsppol))
  ABI_MALLOC(bks_mask, (dtset%mband, ebands%nkpt, ebands%nsppol))
@@ -382,8 +380,6 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  ABI_MALLOC(pol1_rotated, (3, cryst%nsym*(timrev + 1)))
  ABI_MALLOC(pol2_rotated, (3, cryst%nsym*(timrev + 1)))
 
- 
-
  do itim = 0,timrev
    do isym=1,cryst%nsym
      call matr3inv(cryst%symrel_cart(:,:,isym), sym_inv_trans)
@@ -397,6 +393,9 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  mband = ebands%mband
  max_occ = two/ebands%nspinor
 
+ print *, "kptrlatt"
+ nkpt_fbz = ebands%kptrlatt(1,1)*ebands%kptrlatt(2,2)*ebands%kptrlatt(3,3)
+ intmeth = 1
  transrate_tensor = zero
     do isppol = 1,ebands%nsppol   
       do ik = my_start,my_stop
@@ -423,28 +422,46 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
         end do !sband
         
         ! Loop over bands on outside allows us to only compute tetrahedron weights once
-        do sband = 1,mband
+        !do sband = 1,mband
+        do sband = 2,4
           ! fband loop starts as sband to avoid double counting transitions
-          do fband = sband,mband
+          !do fband = sband,mband
+          do fband = sband,5
             population_diff = ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)
             ! Population filter again
             if (abs(population_diff) .lt. 1.0d-12) cycle
             energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol)
             ! get weights
-            call htetra%get_onewk_wvals(ik, 0, nw, wmesh1 + wmesh2, max_occ, ebands%nkpt, energy_fs, weights)
+            weights = zero
+            if (intmeth == 1) then
+              call htetra%get_onewk_wvals(ik, 0, nw, wmesh1 + wmesh2, max_occ, ebands%nkpt, energy_fs, weights)
+            else if (intmeth == 2) then
+              weights(:,1) = max_occ*gaussian(wmesh1 + wmesh2 - energy_fs(ik), 0.0005_dp)
+            end if
             ! filter based on weights
             if (all(abs(weights(:,1)) .lt. 1.0d-12)) cycle
             path_sum = zero
             do iband=1,mband
               energy_is = ebands%eig(sband,ik,isppol) - ebands%eig(iband,ik,isppol)
+             ! detuning_1 = energy_is - wmesh1
+              !if (abs(detuning_1) .lt. 1e-4) detuning_1 = detuning_1 + (0,0.01)
+              !detuning_2 = energy_is - wmesh2
+              !if (abs(detuning_2) .lt. 1e-4) detuning_2 = detuning_2 + (0,0.01)
+
               vk_is = vk(:,iband,sband)
               vk_fi = vk(:,fband,iband)
               do idir = 1,3
                 do jdir = 1,3
-                  summand(:,idir,jdir) = vk_fi(idir)*vk_is(jdir)/(energy_is - wmesh1 + (0,0.01))  &
-&                                        + vk_fi(jdir)*vk_is(idir)/(energy_is - wmesh2 + (0,0.01))
+                  summand(:,idir,jdir) = vk_fi(idir)*vk_is(jdir)/(energy_is - wmesh1 + (0,0.000))  &
+&                                        + vk_fi(jdir)*vk_is(idir)/(energy_is - wmesh2 + (0,0.000))
                 end do !idir
               end do !jdir
+                  if (any(abs(summand) .gt. 5000)) then
+                    !print *, summand
+                    print *, sband, iband, fband
+                    print *, energy_is
+
+                  end if
               path_sum = path_sum + summand
             end do !iband
             integrand = zero
@@ -457,7 +474,7 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
                 end do !kdir
               end do !jdir
             end do !idir
-            transrate_tensor = transrate_tensor + integrand*population_diff*ebands%wtk(ik)
+              transrate_tensor = transrate_tensor + integrand*population_diff*ebands%wtk(ik)
           end do !fband
         end do !sband
       end do !ik
@@ -477,34 +494,31 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
    do isym=1,nsym
      pol1_rot = pol1_rotated(:,nsym*itim + isym)
      pol2_rot = pol2_rotated(:,nsym*itim + isym)
-     print *, "pol1 rot"
-     print *, pol1_rot
-     print *, "pol2 rot"
-     print *, pol2_rot
 
      tens_1c = zero
      do idir=1,3
        tens_1c = tens_1c + transrate_tensor(:,:,:,:,idir)*pol1_rot(idir)
      end do
-     print *, tens_1c
+    !print *, tens_1c
      tens_2c = zero
      do idir=1,3
        tens_2c = tens_2c + tens_1c(:,:,:,idir)*pol1_rot(idir)
      end do
-     print *, tens_2c
+     !print *, tens_2c
      tens_3c = zero
      do idir=1,3
        tens_3c = tens_3c + tens_2c(:,:,idir)*pol2_rot(idir)
      end do
-     print *, "contracted x3"
-     print *, tens_3c
+    !print *, "contracted x3"
+    !print *, tens_3c
      do idir=1,3
        trans_rate = trans_rate + tens_3c(:,idir)*pol2_rot(idir)
      end do
-     print *, "trans rate"
-     print *, trans_rate
+    !print *, "trans rate"
+    !print *, trans_rate
    end do !isym
  end do !itim
+ trans_rate = trans_rate/(nsym*(timrev + 1))
 
  call htetra%free
  call pawcprj_free(cwaveprj0)
@@ -827,8 +841,8 @@ subroutine print_matrix_elements(cryst, ebands, ngfft, comm, dtset, pawtab, psps
             ! renorm? Just seems to make errors larger.
             !renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
             renorm_factor = one
-            vk(sband,fband,:) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
-            vk(fband,sband,:) = conjg(vk(sband,fband,:))
+            vk(fband,sband,:) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
+            vk(sband,fband,:) = conjg(vk(fband,sband,:))
           end do !fband
         end do !sband
       v(:,:,ik,:,isppol) = vk

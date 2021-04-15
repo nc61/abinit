@@ -402,9 +402,9 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
 !   call d2pa_coefs(1, cryst, ebands, "GaAs", ngfftc, 100, pawtab, &
 !&        [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
 !&       0.02565_dp , zero, 0.3_dp, 0.03_dp, comm, dtset, psps, wfk0_path)
-!   call d2pa_coefs(1, cryst, ebands, "GaAs", ngfftc, 500, pawtab, &
-!&        [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
-!&       0.02565_dp , zero, 0.3_dp, -one, comm, dtset, psps, wfk0_path)
+    call d2pa_coefs(1, cryst, ebands, "GaAs", ngfftc, 500, pawtab, &
+ &        [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
+ &       0.02565_dp , 0.02_dp, 0.039_dp, -one, comm, dtset, psps, wfk0_path)
    !call linopt_coefs(1, 0, cryst, ebands, "Si", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.035_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
    !call linopt_coefs(1, 0, cryst, ebands, "Si", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
    !call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, 500, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.03391488548_dp , 2.0_dp, comm, dtset, psps, wfk0_path)
@@ -412,7 +412,7 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
    !call linopt_coefs(1, 0, cryst, ebands, "C", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0437_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
    !call linopt_coefs(1, 0, cryst, ebands, "CdTe", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.029_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
    !call linopt_coefs(1, 0, cryst, ebands, "CdTe", ngfftc, 1000, pawtab, [(one,zero), (zero,zero), (zero,zero)], 0.0422_dp , 2.5_dp, comm, dtset, psps, wfk0_path)
-   call print_matrix_elements(cryst, ebands, ngfftc, comm, dtset, pawtab, psps, wfk0_path)
+   !call print_matrix_elements(cryst, ebands, ngfftc, comm, dtset, pawtab, psps, wfk0_path)
  
 
 

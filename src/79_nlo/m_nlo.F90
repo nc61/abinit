@@ -137,8 +137,6 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  wfd_istwfk = 1
  nband = dtset%mband
 
- print *, "mband"
- print *, mband
  !WFD
  call wfd_init(wfd, cryst, pawtab, psps, keep_ur, dtset%mband, nband, ebands%nkpt, ebands%nsppol, bks_mask,&
                dtset%nspden, ebands%nspinor, dtset%ecut, dtset%ecutsm, dtset%dilatmx, wfd_istwfk, ebands%kptns, ngfft,&

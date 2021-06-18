@@ -22,6 +22,7 @@ sources = [
 "m_ephwg.F90",
 "m_frohlichmodel.F90",
 "m_gkk.F90",
+"m_indabs.F90",
 "m_phgamma.F90",
 "m_phpi.F90",
 "m_rta.F90",

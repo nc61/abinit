@@ -67,7 +67,8 @@ module m_eph_driver
  use m_pawfgr,          only : pawfgr_type, pawfgr_init, pawfgr_destroy
  use m_phgamma,         only : eph_phgamma
  use m_efmas,           only : efmasdeg_free_array, efmasval_free_array, efmas_ncread
- use m_gkk,             only : eph_gkk, ncwrite_v1qnu, absrate_ind2
+ use m_gkk,             only : eph_gkk, ncwrite_v1qnu
+ use m_indabs,          only : indabs
  use m_phpi,            only : eph_phpi
  use m_sigmaph,         only : sigmaph, test_phrotation
  use m_pspini,          only : pspini
@@ -657,10 +658,9 @@ subroutine eph(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps, rprim,
    end if
  
  case (20)
-   print *, "Calling gkq"
+   print *, "Calling indabs"
    ! Compute e-ph matrix elements.
-   !call dvdb%open_read(ngfftf, xmpi_comm_self)
-   call absrate_ind2(wfk0_path, dtfil, ngfftc, ngfftf, dtset, cryst, ebands, dvdb, ifc, &
+   call indabs(wfk0_path, dtfil, ngfftc, ngfftf, dtset, cryst, ebands, dvdb, ifc, &
                 pawfgr, pawang, pawrad, pawtab, psps, mpi_enreg, comm)
    print *, "Exited function"
 

@@ -117,20 +117,25 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ! local variables
  integer :: my_rank,nprocs,nfft,nfftf,mgfft,mgfftf,mband,mpw
  integer :: natom,natom3,nsppol,nspinor,nspden,nkpt,n1,n2,n3,n4,n5,n6
- integer :: isppol,ik,sband,fband,npw_k,istwf_k,nkibz,nkbz
+ integer :: isppol,ik,iq,sband,fband,npw_k,istwf_k,nkibz,nkbz
+ integer :: usevnl,optlocal,optnl,opt_gvnlx1,usecprj,sij_opt 
+ logical :: gen_eigenpb 
+ integer,parameter :: berryopt0=0
  type(wfd_t) :: wfd
  type(ddkop_t) :: ddkop
-
+ type(gs_hamiltonian_type) :: gs_hamkq
+ type(rf_hamiltonian_type) :: rf_hamkq
  real(dp) :: cpu_all,wall_all,gflops_all
  real(dp) :: ecut 
 
  ! arrays
- real(dp) :: v_bks(2,3)
+ real(dp) :: v_bks(2,3), kk(3)
 
  integer,allocatable :: nband(:,:),wfd_istwfk(:),bz2ibz(:,:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
  real(dp),allocatable :: ph1d(:,:),cg_ket(:,:),cg_bra(:,:)
  real(dp),allocatable :: wtk(:), kibz(:,:), kbz(:,:)
+ real(dp),allocatable :: grad_berry(:,:),vtrial(:,:),vlocal(:,:,:,:)
  complex(dpc),allocatable :: vmat(:,:,:,:,:)
 
  if (psps%usepaw == 1) then
@@ -151,14 +156,11 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  n1 = ngfft(1); n2 = ngfft(2); n3 = ngfft(3)
  n4 = ngfft(4); n5 = ngfft(5); n6 = ngfft(6)
 
- ! Get one-dimensional structure factor information on the coarse grid.
- ABI_MALLOC(ph1d, (2,3*(2*mgfft+1)*natom))
- call getph(cryst%atindx, natom, n1, n2, n3, ph1d, cryst%xred)
 
  ! Construct object to store final results.
  ecut = dtset%ecut ! dtset%dilatmx
 
- mband = dtset%mband - dtset%nbdbuf
+ mband = dtset%mband
 
  ABI_MALLOC(nband, (nkpt, nsppol))
  ABI_MALLOC(bks_mask, (mband, nkpt, nsppol))
@@ -172,8 +174,8 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  nband = mband
 
  call wfd_init(wfd, cryst, pawtab, psps, keep_ur, mband, nband, nkpt, nsppol, bks_mask,&
-               dtset%nspden, nspinor, dtset%ecut, dtset%ecutsm, dtset%dilatmx, wfd_istwfk, ebands%kptns, ngfft,&
-               dtset%nloalg, dtset%prtvol, dtset%pawprtvol, comm)
+              dtset%nspden, nspinor, dtset%ecut, dtset%ecutsm, dtset%dilatmx, wfd_istwfk, ebands%kptns, ngfft,&
+              dtset%nloalg, dtset%prtvol, dtset%pawprtvol, comm)
  call wfd%read_wfk(wfk0_path, iomode_from_fname(wfk0_path))
 
  ABI_FREE(bks_mask)
@@ -204,28 +206,71 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
          call wfd%copy_cg(fband,ik,isppol,cg_bra)
          v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, nspinor, cg_bra, mode="cart")
          vmat(:,sband,fband,ik,isppol) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)
+         vmat(:,fband,sband,ik,isppol) = cmplx(v_bks(1,:), -v_bks(2,:),kind=dp)
        end do !fband
      end do !sband
    end do !ik
  end do !isppol
  
-! Get mapping between kpts in ibz and bz
- call kpts_ibz_from_kptrlatt(cryst, ebands%kptrlatt, ebands%kptopt, ebands%nshiftk, ebands%shiftk, &
-   nkibz, kibz, wtk, nkbz, kbz, bz2ibz=bz2ibz) 
 
  ABI_FREE(wtk)
  ABI_FREE(kibz)
  ABI_CHECK(nkibz == ebands%nkpt, "nkibz != ebands%nkpt")
 
- ! Loop over k in the Full Brillouin zone
- do ik=1,nkbz
-   do isppol=1,nsppol
-   end do
- end do !ik
+ ! if PAW, one has to solve a generalized eigenproblem
+ ! BE careful here because I will need sij_opt == -1
+ usecprj = 0
+ gen_eigenpb = psps%usepaw == 1; sij_opt = 0; if (gen_eigenpb) sij_opt = 1
+
+ ! Prepare call to getgh1c
+ usevnl = 0
+ optlocal = 1   ! local part of H^(1) is computed in gh1c=<G|H^(1)|C>
+ optnl = 2      ! non-local part of H^(1) is totally computed in gh1c=<G|H^(1)|C>
+ opt_gvnlx1 = 0 ! gvnlx1 is output
+
+ ABI_MALLOC(grad_berry, (2, nspinor*(berryopt0/4)))
+
+ ! This part is taken from dfpt_vtorho
+ !==== Initialize most of the Hamiltonian (and derivative) ====
+ ! 1) Allocate all arrays and initialize quantities that do not depend on k and spin.
+ ! 2) Perform the setup needed for the non-local factors:
+ !
+ ! Norm-conserving: Constant kleimann-Bylander energies are copied from psps to gs_hamk.
+ ! PAW: Initialize the overlap coefficients and allocate the Dij coefficients.
+
+ ! Get one-dimensional structure factor information on the coarse grid.
+ ABI_MALLOC(ph1d, (2,3*(2*mgfft+1)*natom))
+ call getph(cryst%atindx, natom, n1, n2, n3, ph1d, cryst%xred)
+
+ call init_hamiltonian(gs_hamkq, psps, pawtab, nspinor, nsppol, nspden, natom,&
+  dtset%typat, cryst%xred, nfft, mgfft, ngfft, cryst%rprimd, dtset%nloalg,&
+  comm_atom=mpi_enreg%comm_atom, mpi_atmtab=mpi_enreg%my_atmtab, mpi_spintab=mpi_enreg%my_isppoltab,&
+  usecprj=usecprj, ph1d=ph1d, nucdipmom=dtset%nucdipmom, use_gpu_cuda=dtset%use_gpu_cuda)
+
+ ! Allocate work space arrays.
+ ! vtrial and vlocal are required for Sternheimer (H0). DFPT routines do not need it.
+ ! Note nvloc in vlocal (we will select one/four spin components afterwards)
+ ABI_CALLOC(vtrial, (nfftf, nspden))
+ ABI_CALLOC(vlocal, (n4, n5, n6, gs_hamkq%nvloc))
+
+ ! Open the DVDB file
+ call dvdb%open_read(ngfftf, xmpi_comm_self)
+ 
+ !Get mapping between kpts in ibz and bz
+ call kpts_ibz_from_kptrlatt(cryst, ebands%kptrlatt, ebands%kptopt, ebands%nshiftk, ebands%shiftk, &
+   nkibz, kibz, wtk, nkbz, kbz, bz2ibz=bz2ibz) 
+
+ ! Loop over q in full BZ
+ do iq=1,nkbz
+      
+ end do !iq
 
  ABI_FREE(vmat)
  ABI_FREE(cg_ket)
  ABI_FREE(cg_bra)
+ ABI_FREE(grad_berry)
+ ABI_FREE(vtrial)
+ ABI_FREE(vlocal)
 
  end subroutine indabs
 

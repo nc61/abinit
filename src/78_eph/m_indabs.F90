@@ -61,6 +61,7 @@ module m_indabs
  use defs_abitypes,    only : mpi_type
  use defs_datatypes,   only : ebands_t, pseudopotential_type
  use m_time,           only : cwtime, cwtime_report, timab, sec2str
+ use m_bz_mesh,        only : findqg0
  use m_fstrings,       only : itoa, ftoa, sjoin, ktoa, ltoa, strcat
  use m_numeric_tools,  only : arth, c2r, get_diag, linfit, iseven, simpson_cplx, simpson, print_arr
  use m_io_tools,       only : iomode_from_fname, file_exists, is_open, open_file
@@ -80,6 +81,7 @@ module m_indabs
  use m_pawtab,         only : pawtab_type
  use m_pawrhoij,       only : pawrhoij_type
  use m_pawfgr,         only : pawfgr_type
+ use m_symtk,          only : littlegroup_q
  use m_dfpt_cgwf,      only : dfpt_cgwf
  use m_dynmat,         only : pheigvec_normalize, massmult_and_breaksym, phdispl_from_eigvec
  use m_geometry,       only : phdispl_cart2red
@@ -115,12 +117,18 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  type(pawcprj_type),allocatable  :: cwaveprj0(:,:) !natom,nspinor*usecprj)
 
  ! local variables
+ character(len=500) :: msg
  integer :: my_rank,nprocs,nfft,nfftf,mgfft,mgfftf,mband,mpw
  integer :: natom,natom3,nsppol,nspinor,nspden,nkpt,n1,n2,n3,n4,n5,n6
- integer :: isppol,ik,iq,sband,fband,npw_k,istwf_k,nkibz,nkbz
+ integer :: spin,ik,iq,sband,fband,npw_k,istwf_k,nkibz,nkbz
  integer :: usevnl,optlocal,optnl,opt_gvnlx1,usecprj,sij_opt 
- logical :: gen_eigenpb 
- integer,parameter :: berryopt0=0
+ integer :: interpolated,comm_rpt,cplex,db_iqpt,timrev_q
+ integer :: ikq,nkpg1,ik_ibz,isym_k,trev_k,isym_kq,ikq_ibz,trev_kq
+ integer :: istwf_kq,npw_kq,imyp,idir,ipert,my_npert
+ integer :: ierr
+ logical :: gen_eigenpb,use_ftinterp,verbose,isirr_k,isirr_kq
+ integer,parameter :: tim_getgh1c=1,berryopt0=0,istw1=1,ider0=0,idir0=0
+ integer,parameter :: useylmgr1=0,useylmgr0=0
  type(wfd_t) :: wfd
  type(ddkop_t) :: ddkop
  type(gs_hamiltonian_type) :: gs_hamkq
@@ -129,13 +137,16 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  real(dp) :: ecut 
 
  ! arrays
- real(dp) :: v_bks(2,3), kk(3)
+ real(dp) :: v_bks(2,3), kpt(3), qpt(3), kqpt(3)
+ integer :: symq(4,2,cryst%nsym), g0_k(3),g0_kq(3),sym_k(6),sym_kq(6)
 
- integer,allocatable :: nband(:,:),wfd_istwfk(:),bz2ibz(:,:)
+ integer,allocatable :: nband(:,:),wfd_istwfk(:),bz2ibz(:,:),gtmp(:,:),kg_kq(:,:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
  real(dp),allocatable :: ph1d(:,:),cg_ket(:,:),cg_bra(:,:)
  real(dp),allocatable :: wtk(:), kibz(:,:), kbz(:,:)
- real(dp),allocatable :: grad_berry(:,:),vtrial(:,:),vlocal(:,:,:,:)
+ real(dp),allocatable :: grad_berry(:,:),vtrial(:,:),vlocal(:,:,:,:),h1kets_kq(:,:,:,:),vlocal1(:,:,:,:,:)
+ real(dp),allocatable :: v1scf(:,:,:,:),ffnl(:,:,:,:),kpg1_k(:,:),ffnl1(:,:,:,:)
+ real(dp),allocatable :: ylm_kq(:,:),ylm_k(:,:),ylmgr_kq(:,:,:)
  complex(dpc),allocatable :: vmat(:,:,:,:,:)
 
  if (psps%usepaw == 1) then
@@ -156,11 +167,16 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  n1 = ngfft(1); n2 = ngfft(2); n3 = ngfft(3)
  n4 = ngfft(4); n5 = ngfft(5); n6 = ngfft(6)
 
+ ! For now no parallelism over perturbations. Each processor handles all perturbations
+ my_npert = natom3
 
  ! Construct object to store final results.
  ecut = dtset%ecut ! dtset%dilatmx
 
  mband = dtset%mband
+ print *, "nkpt"
+ print *, nsppol
+ print *, nkpt
 
  ABI_MALLOC(nband, (nkpt, nsppol))
  ABI_MALLOC(bks_mask, (mband, nkpt, nsppol))
@@ -191,31 +207,27 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ABI_CALLOC(cg_bra, (2, mpw*ebands%nspinor))
 
 
- do isppol = 1,nsppol   
+ do spin = 1,nsppol   
    do ik = 1,nkpt
      npw_k = wfd%npwarr(ik); istwf_k = wfd%istwfk(ik)
      ! ik loop outside so this is only called once per k point
-     call ddkop%setup_spin_kpoint(dtset, cryst, psps, isppol, ebands%kptns(:,ik), istwf_k, npw_k, wfd%kdata(ik)%kg_k)
+     call ddkop%setup_spin_kpoint(dtset, cryst, psps, spin, ebands%kptns(:,ik), istwf_k, npw_k, wfd%kdata(ik)%kg_k)
      ! Precompute all needed matrix elements in IBZ
      do sband = 1,mband
-       call wfd%copy_cg(sband,ik,isppol,cg_ket)
-       call ddkop%apply(ebands%eig(sband,ik,isppol), npw_k, nspinor, cg_ket, cwaveprj0)
+       call wfd%copy_cg(sband,ik,spin,cg_ket)
+       call ddkop%apply(ebands%eig(sband,ik,spin), npw_k, nspinor, cg_ket, cwaveprj0)
        do fband = sband,mband       
          ! Don't bother computing if they have the same population
-         if (abs(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)) .lt. 1.0d-12) cycle
-         call wfd%copy_cg(fband,ik,isppol,cg_bra)
-         v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, nspinor, cg_bra, mode="cart")
-         vmat(:,sband,fband,ik,isppol) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)
-         vmat(:,fband,sband,ik,isppol) = cmplx(v_bks(1,:), -v_bks(2,:),kind=dp)
+         if (abs(ebands%occ(sband,ik,spin) - ebands%occ(fband,ik,spin)) .lt. 1.0d-12) cycle
+         call wfd%copy_cg(fband,ik,spin,cg_bra)
+         v_bks = ddkop%get_braket(ebands%eig(sband,ik,spin),istwf_k, npw_k, nspinor, cg_bra, mode="cart")
+         vmat(:,sband,fband,ik,spin) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)
+         vmat(:,fband,sband,ik,spin) = cmplx(v_bks(1,:), -v_bks(2,:),kind=dp)
        end do !fband
      end do !sband
    end do !ik
- end do !isppol
+ end do !spin
  
-
- ABI_FREE(wtk)
- ABI_FREE(kibz)
- ABI_CHECK(nkibz == ebands%nkpt, "nkibz != ebands%nkpt")
 
  ! if PAW, one has to solve a generalized eigenproblem
  ! BE careful here because I will need sij_opt == -1
@@ -248,7 +260,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
   usecprj=usecprj, ph1d=ph1d, nucdipmom=dtset%nucdipmom, use_gpu_cuda=dtset%use_gpu_cuda)
 
  ! Allocate work space arrays.
- ! vtrial and vlocal are required for Sternheimer (H0). DFPT routines do not need it.
+ ! vtrial and vlocal are required for Sternheimer (H0)
  ! Note nvloc in vlocal (we will select one/four spin components afterwards)
  ABI_CALLOC(vtrial, (nfftf, nspden))
  ABI_CALLOC(vlocal, (n4, n5, n6, gs_hamkq%nvloc))
@@ -260,17 +272,158 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  call kpts_ibz_from_kptrlatt(cryst, ebands%kptrlatt, ebands%kptopt, ebands%nshiftk, ebands%shiftk, &
    nkibz, kibz, wtk, nkbz, kbz, bz2ibz=bz2ibz) 
 
+ ABI_FREE(wtk)
+ ABI_FREE(kibz)
+ ABI_CHECK(nkibz == ebands%nkpt, "nkibz != ebands%nkpt")
+ verbose = .true.
+ if (nkpt > 50) verbose = .false.
+ ! Initialize v1scf to store first order potential
+ cplex = 2
+ ABI_MALLOC(v1scf, (cplex, nfftf, nspden, dvdb%my_npert))
+ call wrtout(std_out, sjoin("MSG: nkpt", itoa(nkbz)))
+
+
+ ABI_MALLOC(kg_kq, (3,mpw))
+ ! Spherical Harmonics for useylm == 1.
+ ABI_MALLOC(ylm_k, (mpw, psps%mpsang**2 * psps%useylm))
+ ABI_MALLOC(ylm_kq, (mpw, psps%mpsang**2 * psps%useylm))
+ ! TODO: useylmgr 1 vs 0?
+ ABI_MALLOC(ylmgr_kq, (mpw, 3, psps%mpsang**2 * psps%useylm * useylmgr0))
+
  ! Loop over q in full BZ
  do iq=1,nkbz
-      
+   qpt = kbz(:,iq)
+   if (verbose) call wrtout(std_out, sjoin("MSG: Treating qpt", ktoa(qpt)))
+
+   ! Interpolation setup taken from m_gkk
+   interpolated = 0
+   if (dtset%eph_use_ftinterp /= 0) then
+     !MSG_WARNING(sjoin("Enforcing FT interpolation for q-point", ktoa(qpt)))
+     comm_rpt = xmpi_comm_self
+     call dvdb%ftinterp_setup(dtset%ddb_ngqpt, 1, dtset%ddb_shiftq, nfftf, ngfftf, comm_rpt)
+     call dvdb%ftinterp_qpt(qpt, nfftf, ngfftf, v1scf, dvdb%comm_rpt)
+     interpolated = 1
+   else
+     ! Find the index of the q-point in the DVDB.
+     db_iqpt = dvdb%findq(qpt)
+     if (db_iqpt /= -1) then
+       !if (dtset%prtvol > 0) call wrtout(std_out, sjoin("Found: ",ktoa(qpt)," in DVDB with index ",itoa(db_iqpt)))
+       ! Read or reconstruct the dvscf potentials for all 3*natom perturbations.
+       ! This call allocates v1scf(cplex, nfftf, nspden, 3*natom))
+       call dvdb%readsym_allv1(db_iqpt, cplex, nfftf, ngfftf, v1scf, comm)
+     else
+       MSG_WARNING(sjoin("Cannot find q-point:", ktoa(qpt), "in DVDB file"))
+     end if
+   end if
+
+   do ik=1,nkbz
+     kpt = kbz(:,ik)
+     kqpt = kpt + qpt
+     ! Find the index of the k+q point
+     call findqg0(ikq, g0_kq, kqpt, nkbz, kbz, [1,1,1])
+     if (verbose) call wrtout(std_out, sjoin("MSG: Treating transitions from kpt", ktoa(kpt), "to k+q", ktoa(kqpt), "connected by qpt", ktoa(qpt)))
+
+     ! Get the symmetry information mapping the k point to the IBZ
+     sym_k = bz2ibz(:,ik)
+     ik_ibz = sym_k(1); isym_k = sym_k(2)
+     trev_k = sym_k(6); g0_k = sym_k(3:5)
+     isirr_k = (isym_k == 1 .and. trev_k == 0 .and. all(g0_k == 0))
+     if (verbose) then
+       call wrtout(std_out, sjoin("Symmetry information for kpt", ktoa(kpt), ":"))
+       call wrtout(std_out, sjoin("Index/kpt in ibz:", itoa(ik_ibz), ktoa(ebands%kptns(:,ik_ibz))))
+       call wrtout(std_out, sjoin("Connected by symmetry operation", itoa(isym_k), itoa(trev_k)))
+       call wrtout(std_out, sjoin("G0", ltoa(g0_k)))
+     end if
+ 
+     ! Get the symmetry information mapping the k point to the IBZ
+     sym_kq = bz2ibz(:,ikq)
+     ikq_ibz = sym_kq(1); isym_kq = sym_kq(2)
+     trev_kq = sym_kq(6); g0_kq = sym_kq(3:5)
+     isirr_kq = (isym_kq == 1 .and. trev_kq == 0 .and. all(g0_kq == 0))
+     if (verbose) then
+       call wrtout(std_out, sjoin("Symmetry information for kpt", ktoa(kqpt), ":"))
+       call wrtout(std_out, sjoin("Index/kpt in ibz:", itoa(ikq_ibz), ktoa(ebands%kptns(:,ikq_ibz))))
+       call wrtout(std_out, sjoin("Connected by symmetry operation", itoa(isym_kq), itoa(trev_kq)))
+       call wrtout(std_out, sjoin("G0", ltoa(g0_kq)))
+     end if
+
+     ! Get npw_kq, kg_kq for k+q.
+     if (isirr_kq) then
+       ! Copy u_kq(G)
+       istwf_kq = wfd%istwfk(ikq_ibz); npw_kq = wfd%npwarr(ikq_ibz)
+       ABI_CHECK(mpw >= npw_kq, "mpw < npw_kq")
+       kg_kq(:,1:npw_kq) = wfd%kdata(ikq_ibz)%kg_k
+     else
+       ! Reconstruct u_kq(G) from the IBZ image.
+       istwf_kq = 1
+       call get_kg(kqpt, istwf_kq, ecut, cryst%gmet, npw_kq, gtmp)
+       ABI_CHECK(mpw >= npw_kq, "mpw < npw_kq")
+       kg_kq(:,1:npw_kq) = gtmp(:,:npw_kq)
+       ABI_FREE(gtmp)
+     end if
+
+
+     ABI_MALLOC_OR_DIE(vlocal1, (cplex*n4, n5, n6, gs_hamkq%nvloc, my_npert), ierr)     
+
+     ! Compute k+q+G vectors
+     nkpg1 = 3*dtset%nloalg(3) ! Determine size for kpg1_k. Either 3 (compute vectors) or 0 (don't compute, don't allocate) 
+     ABI_MALLOC(kpg1_k, (npw_kq, nkpg1)) !Initialize array to store k+G vectors
+     if (nkpg1 > 0) call mkkpg(kg_kq, kpg1_k, kqpt, nkpg1, npw_kq)
+
+     ! Compute nonlocal form factors ffnl1 at (k+q+G) 
+     ! TODO: comm?
+     ABI_MALLOC(ffnl1, (npw_kq, 1, psps%lmnmax, psps%ntypat))
+     call mkffnl(psps%dimekb, 1, psps%ekb, ffnl1, psps%ffspl, cryst%gmet, cryst%gprimd, ider0, idir0, &
+       psps%indlmn, kg_kq, kpg1_k, kqpt, psps%lmnmax, psps%lnmax, psps%mpsang, psps%mqgrid_ff, nkpg1, &
+       npw_kq, psps%ntypat, psps%pspso, psps%qgrid_ff, cryst%rmet, psps%usepaw, psps%useylm, ylm_kq, ylmgr_kq, &
+       comm=comm)
+
+     ! Loop over all 3*natom perturbations (Each CPU prepares its own potentials)
+     ! In the inner loop, I calculate H1 * psi_k, stored in h1kets_kq on the k+q sphere.
+     do imyp=1,my_npert
+       ! From m_gkk: assign each perturbation a direction and perturbation number
+       idir = mod(imyp-1, 3) + 1
+       ipert = (imyp - idir) / 3 + 1
+       if (verbose) write(msg, '(a,2i4)') " Treating ipert, idir = ", ipert, idir
+       call wrtout(std_out, msg, do_flush=.True.)
+
+
+       ! Set up local potential vlocal1 with proper dimensioning, from vtrial1 taking into account the spin.
+       call rf_transgrid_and_pack(spin, nspden, psps%usepaw, cplex, nfftf, nfft, ngfft, gs_hamkq%nvloc, &
+         pawfgr, mpi_enreg, vtrial, v1scf(:,:,:,imyp), vlocal, vlocal1(:,:,:,:,imyp))
+
+       ! Continue to initialize the Hamiltonian (call it here to support dfpt_cgwf Sternheimer).
+       call gs_hamkq%load_spin(spin, vlocal=vlocal, with_nonlocal=.true.)
+
+       ! Prepare application of the NL part.
+       call init_rf_hamiltonian(cplex, gs_hamkq, ipert, rf_hamkq, has_e1kbsc=.true.)
+       call rf_hamkq%load_spin(spin, vlocal1=vlocal1(:,:,:,:,imyp), with_nonlocal=.true.)
+
+    !  ! This call is not optimal because there are quantities in out that do not depend on idir,ipert
+    !  call getgh1c_setup(gs_hamkq, rf_hamkq, dtset, psps, kk, kq, idir, ipert, &  ! In
+    !    cryst%natom, cryst%rmet, cryst%gprimd, cryst%gmet, istwf_k, &             ! In
+    !    npw_k, npw_kq, useylmgr1, kg_k, ylm_k, kg_kq, ylm_kq, ylmgr_kq, &         ! In
+    !    dkinpw, nkpg, nkpg1, kpg_k, kpg1_k, kinpw1, ffnlk, ffnl1, ph3d, ph3d1, &  ! Out
+    !    reuse_kpg_k=1, reuse_kpg1_k=1, reuse_ffnlk=1, reuse_ffnl1=1)              ! Reuse some arrays
+     end do !imyp
+ 
+     ABI_FREE(ffnl1)
+     ABI_FREE(kpg1_k)
+     ABI_FREE(vlocal1)
+   end do !ik
  end do !iq
 
+ ABI_FREE(kg_kq)
  ABI_FREE(vmat)
  ABI_FREE(cg_ket)
  ABI_FREE(cg_bra)
  ABI_FREE(grad_berry)
  ABI_FREE(vtrial)
  ABI_FREE(vlocal)
+ ABI_FREE(v1scf)
+ ABI_FREE(ylm_k)
+ ABI_FREE(ylm_kq)
+ ABI_FREE(ylmgr_kq)
 
  end subroutine indabs
 

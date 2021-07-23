@@ -126,9 +126,10 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  integer :: ikq,nkpg,nkpg1,ik_ibz,isym_k,trev_k,isym_kq,ikq_ibz,trev_kq
  integer :: istwf_kq,npw_kq,istwf_kqibz,npw_kqibz,istwf_k,npw_k,istwf_kibz,npw_kibz
  integer :: ierr,iband,imyp,idir,ipert,my_npert
+ integer :: max_umklapp,i1,i2,i3,ipw,onpw,ii
  logical :: gen_eigenpb,use_ftinterp,verbose,isirr_k,isirr_kq
  integer,parameter :: tim_getgh1c=1,berryopt0=0,istw1=1,ider0=0,idir0=0
- integer,parameter :: useylmgr1=0,useylmgr0=0,ndat1=1
+ integer,parameter :: useylmgr1=0,useylmgr0=0,ndat1=1,istwfk1=1
  type(wfd_t) :: wfd
  type(ddkop_t) :: ddkop
  type(gs_hamiltonian_type) :: gs_hamkq
@@ -137,9 +138,10 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  real(dp) :: ecut 
 
  ! arrays
- real(dp) :: v_bks(2,3),kpt(3),kpt_ibz(3),qpt(3),kqpt(3)
+ real(dp) :: v_bks(2,3),kpt(3),kpt_ibz(3),qpt(3),kqpt(3),kptu(3)
  real(dp) :: ylmgr_dum(1,1,1)
  integer :: symq(4,2,cryst%nsym), g0_k(3),g0_kq(3),sym_k(6),sym_kq(6)
+ integer :: work_ngfft(18),gmax(3)
 
  integer,allocatable :: nband(:,:),wfd_istwfk(:),bz2ibz(:,:),gtmp(:,:),kg_kq(:,:),kg_k(:,:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
@@ -168,6 +170,8 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  nfft = product(ngfft(1:3)) ; mgfft = maxval(ngfft(1:3))
  n1 = ngfft(1); n2 = ngfft(2); n3 = ngfft(3)
  n4 = ngfft(4); n5 = ngfft(5); n6 = ngfft(6)
+ call wrtout(std_out, sjoin("FFT grid:", ltoa(ngfft)))
+ 
 
  ! For now no parallelism over perturbations. Each processor handles all perturbations
  my_npert = natom3
@@ -198,7 +202,12 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ABI_FREE(wfd_istwfk)
  ABI_FREE(nband)
 
+
  mpw = maxval(wfd%npwarr)
+ call wrtout(std_out,sjoin("mpw:", itoa(mpw)))
+ call wrtout(std_out,sjoin("Npw for all k points",ltoa(wfd%npwarr)))
+ call wrtout(std_out,sjoin("istwfk for all k points",ltoa(wfd%istwfk)))
+ print *, "gmet", cryst%gmet
  ABI_MALLOC(vmat, (3,mband,mband,nkpt,nsppol))
  ddkop = ddkop_new(dtset, cryst, pawtab, psps, wfd%mpi_enreg, mpw, wfd%ngfft)
 
@@ -289,6 +298,35 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ABI_MALLOC(ylm_kq, (mpw, psps%mpsang**2 * psps%useylm))
  ! TODO: useylmgr1 has value 0 but the name implies it should be 1
  ABI_MALLOC(ylmgr_kq, (mpw, 3, psps%mpsang**2 * psps%useylm * useylmgr1))
+
+ ! mpw is the maximum number of plane-waves over k and k+q where k and k+q are in the BZ.
+ max_umklapp = 10 
+ 
+ do ik=1,nkbz
+   kpt = kbz(:, ik)
+   do i3=-max_umklapp,max_umklapp
+     do i2=-max_umklapp,max_umklapp
+       do i1=-max_umklapp,max_umklapp
+         kptu = kpt + one*[i1, i2, i3]
+         ! TODO: g0 umklapp here can enter into play gmax may not be large enough!
+         call get_kg(kptu, istwfk1, 1.1_dp * ecut, cryst%gmet, onpw, gtmp)
+         mpw = max(mpw, onpw)
+         call wrtout(std_out, sjoin("npw trial",itoa(onpw)))
+         do ipw=1,onpw
+           do ii=1,3
+             gmax(ii) = max(gmax(ii), abs(gtmp(ii, ipw)))
+           end do
+         end do
+         ABI_FREE(gtmp)
+       end do
+     end do
+   end do
+ end do
+ call wrtout(std_out,sjoin("New mpw:", itoa(mpw)))
+
+!! Init work_ngfft
+!call ngfft_seq(work_ngfft, gmax)
+!if (verbose) call wrtout(std_out,sjoin("work_ngfft:", ltoa(work_ngfft)))
  
  ! Loop over q in full BZ
  do iq=1,nkbz

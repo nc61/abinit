@@ -6,7 +6,7 @@
 !!  This module contains basic tools for numeric computations.
 !!
 !! COPYRIGHT
-!! Copyright (C) 2008-2020 ABINIT group (MG, GMR, MJV, XG, MVeithen, NH, FJ, MT, DCS, FrD, Olevano, Reining, Sottile, AL)
+!! Copyright (C) 2008-2021 ABINIT group (MG, GMR, MJV, XG, MVeithen, NH, FJ, MT, DCS, FrD, Olevano, Reining, Sottile, AL)
 !! This file is distributed under the terms of the
 !! GNU General Public License, see ~abinit/COPYING
 !! or http://www.gnu.org/copyleft/gpl.txt .
@@ -83,7 +83,8 @@ MODULE m_numeric_tools
  public :: isordered             ! Check the ordering of a sequence.
  public :: wrap2_zero_one        ! Transforms a real number in a reduced number in the interval [0,1[ where 1 is not included (tol12)
  public :: wrap2_pmhalf          ! Transforms a real number in areduced number in the interval ]-1/2,1/2] where -1/2 is not included (tol12)
- public :: interpol3d            ! Linear interpolation in 3D
+ public :: interpol3d_0d         ! Linear interpolation in 3D
+ public :: interpol3d_1d         ! Linear interpolation in 3D for an array
  public :: interpol3d_indices    ! Computes the indices in a cube which are neighbors to the point to be interpolated in interpol3d
  public :: interpolate_denpot    ! Liner interpolation of scalar field e.g. density of potential
  public :: simpson_int           ! Simpson integral of a tabulated function. Returns arrays with integrated values
@@ -230,6 +231,7 @@ MODULE m_numeric_tools
  interface isordered
    module procedure isordered_rdp
  end interface isordered
+
 !!***
 
 !----------------------------------------------------------------------
@@ -1719,7 +1721,7 @@ end function imax_loc_rdp
 !!
 !! SOURCE
 
-pure function imin_loc_int(arr,mask)
+pure function imin_loc_int(arr, mask)
 
 !Arguments ------------------------------------
 !scalars
@@ -2331,7 +2333,7 @@ subroutine polyn_interp(xa,ya,x,y,dy)
  do m=1,n-1
   den(1:n-m)=ho(1:n-m)-ho(1+m:n)
   if (ANY(den(1:n-m)==zero)) then
-   MSG_ERROR('Two input xa are identical')
+   ABI_ERROR('Two input xa are identical')
   end if
 
   den(1:n-m)=(c(2:n-m+1)-d(1:n-m))/den(1:n-m)
@@ -2449,7 +2451,7 @@ recursive subroutine trapezoidal_(func,nn,xmin,xmax,quad)
 
  case (:0)
    write(msg,'(a,i3)')'Wrong value for nn ',nn
-   MSG_BUG(msg)
+   ABI_BUG(msg)
  end select
 
 end subroutine trapezoidal_
@@ -2546,7 +2548,7 @@ end subroutine trapezoidal_
 
  case (:0)
    write(msg,'(a,i3)')' wrong value for nn ',nn
-   MSG_BUG('Wrong value for nn')
+   ABI_BUG('Wrong value for nn')
  end select
 
 end subroutine midpoint_
@@ -2760,12 +2762,12 @@ recursive subroutine quadrature(func,xmin,xmax,qopt,quad,ierr,ntrial,accuracy,np
 
  case default
    write(msg,'(a,i3)')'Wrong value for qopt',qopt
-   MSG_BUG(msg)
+   ABI_BUG(msg)
  end select
 
  write(msg,'(a,i0,2(a,es14.6))')&
 &  "Results are not converged within the given accuracy. ntrial= ",NT,"; EPS= ",EPS,"; TOL= ",TOL
- MSG_WARNING(msg)
+ ABI_WARNING(msg)
  ierr = -1
 
 end subroutine quadrature
@@ -2981,7 +2983,7 @@ subroutine cspint ( ftab, xtab, ntab, a, b, y, e, work, result )
     write(std_out,'(a)' ) ' '
     write(std_out,'(a)' ) 'CSPINT - Fatal error!'
     write(std_out,'(a,i6)' ) '  NTAB must be at least 3, but input NTAB = ',ntab
-    MSG_ERROR("Aborting now")
+    ABI_ERROR("Aborting now")
   end if
 
   do i = 1, ntab-1
@@ -2993,7 +2995,7 @@ subroutine cspint ( ftab, xtab, ntab, a, b, y, e, work, result )
       write(std_out,'(a,i6)' ) '  XTAB(I) <= XTAB(I-1) for I=',i
       write(std_out,'(a,g14.6)' ) '  XTAB(I) = ',xtab(i)
       write(std_out,'(a,g14.6)' ) '  XTAB(I-1) = ',xtab(i-1)
-      MSG_ERROR("Aborting now")
+      ABI_ERROR("Aborting now")
     end if
 
   end do
@@ -3207,7 +3209,7 @@ function simpson_cplx(npts,step,ff)
  my_n=npts; if ((npts/2)*2 == npts) my_n=npts-3
 
  if (my_n<2) then
-   MSG_ERROR("Too few points")
+   ABI_ERROR("Too few points")
  end if
 
  sum_odd=czero
@@ -3312,7 +3314,7 @@ subroutine hermitianize_spc(mat,uplo)
   end do
 
  case default
-   MSG_ERROR("Wrong uplo"//TRIM(uplo))
+   ABI_ERROR("Wrong uplo"//TRIM(uplo))
  end select
 
 end subroutine hermitianize_spc
@@ -3399,7 +3401,7 @@ subroutine hermitianize_dpc(mat,uplo)
   end do
 
  case default
-   MSG_ERROR("Wrong uplo"//TRIM(uplo))
+   ABI_ERROR("Wrong uplo"//TRIM(uplo))
  end select
 
 end subroutine hermitianize_dpc
@@ -3490,7 +3492,7 @@ end subroutine mkherm
 !!
 !! SOURCE
 
-subroutine hermit(chmin,chmout,ierr,ndim)
+subroutine hermit(chmin, chmout, ierr, ndim)
 
 !Arguments ------------------------------------
 !scalars
@@ -3506,7 +3508,7 @@ subroutine hermit(chmin,chmout,ierr,ndim)
  integer :: idim,merrors,nerrors
  real(dp),parameter :: eps=epsilon(0.0d0)
  real(dp) :: ch_im,ch_re,moduls,tol
- character(len=500) :: message
+ character(len=500) :: msg
 
 ! *************************************************************************
 
@@ -3531,18 +3533,18 @@ subroutine hermit(chmin,chmout,ierr,ndim)
    if( abs(ch_im) > tol .or. abs(ch_im) > tol8*abs(ch_re)) nerrors=1
 
    if( (abs(ch_im) > tol .and. nmesgs<mmesgs) .or. nerrors==2)then
-     write(message, '(3a,i0,a,es20.12,a,es20.12,a)' )&
-&     'Input Hermitian matrix has nonzero relative Im part on diagonal:',ch10,&
-&     'for component',idim,' Im part is',ch_im,', Re part is',ch_re,'.'
-     call wrtout(std_out,message,'PERS')
+     write(msg, '(3a,i0,a,es20.12,a,es20.12,a)' )&
+     ' Input Hermitian matrix has nonzero relative Im part on diagonal:',ch10,&
+     ' for component:',idim,' Im part is: ',ch_im,', Re part is: ',ch_re,'.'
+     call wrtout(std_out,msg)
      nmesgs=nmesgs+1
    end if
 
    if( ( abs(ch_im) > tol8*abs(ch_re) .and. nmesgs<mmesgs) .or. nerrors==2)then
-     write(message, '(3a,i0,a,es20.12,a,es20.12,a)' )&
-&     'Input Hermitian matrix has nonzero relative Im part on diagonal:',ch10,&
-&     'for component',idim,' Im part is',ch_im,', Re part is',ch_re,'.'
-     call wrtout(std_out,message,'PERS')
+     write(msg, '(3a,i0,a,es20.12,a,es20.12,a)' )&
+     ' Input Hermitian matrix has nonzero relative Im part on diagonal:',ch10,&
+     ' for component',idim,' Im part is',ch_im,', Re part is',ch_re,'.'
+     call wrtout(std_out,msg)
      nmesgs=nmesgs+1
    end if
 
@@ -3561,10 +3563,10 @@ subroutine hermit(chmin,chmout,ierr,ndim)
 
  if(merrors==2)then
    ierr=1
-   write(message, '(3a)' )&
-&   'Imaginary part(s) of diagonal Hermitian matrix element(s) is too large.',ch10,&
-&   'See previous messages.'
-   MSG_BUG(message)
+   write(msg, '(3a)' )&
+    'Imaginary part(s) of diagonal Hermitian matrix element(s) is too large.',ch10,&
+    'See previous messages.'
+   ABI_BUG(msg)
  end if
 
 end subroutine hermit
@@ -3643,7 +3645,7 @@ subroutine symmetrize_spc(mat,uplo)
   end do
 
  case default
-   MSG_ERROR("Wrong uplo"//TRIM(uplo))
+   ABI_ERROR("Wrong uplo"//TRIM(uplo))
  end select
 
 end subroutine symmetrize_spc
@@ -3721,7 +3723,7 @@ subroutine symmetrize_dpc(mat,uplo)
   end do
 
  case default
-   MSG_ERROR("Wrong uplo"//TRIM(uplo))
+   ABI_ERROR("Wrong uplo"//TRIM(uplo))
  end select
 
 end subroutine symmetrize_dpc
@@ -3736,11 +3738,11 @@ end subroutine symmetrize_dpc
 !!
 !! INPUTS
 !! N: size of matrix
-!! cplx: is the matrix complex
-!! mat_in(2, N*N)= matrix to be packed
+!! cplx: 2 if matrix is complex, 1 for real matrix.
+!! mat_in(cplx, N*N)= matrix to be packed
 !!
 !! OUTPUT
-!! mat_out(N*N+1)= packed matrix
+!! mat_out(cplx*N*N+1/2)= packed matrix (upper triangle)
 !!
 !! PARENTS
 !!      m_rayleigh_ritz
@@ -3751,10 +3753,11 @@ end subroutine symmetrize_dpc
 
 subroutine pack_matrix(mat_in, mat_out, N, cplx)
 
-
  integer, intent(in) :: N, cplx
  real(dp), intent(in) :: mat_in(cplx, N*N)
  real(dp), intent(out) :: mat_out(cplx*N*(N+1)/2)
+
+!local variables
  integer :: isubh, i, j
 
  ! *************************************************************************
@@ -3826,7 +3829,7 @@ subroutine print_arr1d_spc(arr,max_r,unit,mode_paral)
 
  if (mode/='COLL'.and.mode/='PERS') then
   write(msg,'(2a)')' Wrong value of mode_paral ',mode
-  MSG_BUG(msg)
+  ABI_BUG(msg)
  end if
  !
  ! === Print out matrix ===
@@ -3886,7 +3889,7 @@ subroutine print_arr1d_dpc(arr,max_r,unit,mode_paral)
 
  if (mode/='COLL'.and.mode/='PERS') then
   write(msg,'(2a)')' Wrong value of mode_paral ',mode
-  MSG_BUG(msg)
+  ABI_BUG(msg)
  end if
  !
  ! === Print out matrix ===
@@ -3947,7 +3950,7 @@ subroutine print_arr2d_spc(arr,max_r,max_c,unit,mode_paral)
 
  if (mode/='COLL'.and.mode/='PERS') then
    write(msg,'(2a)')'Wrong value of mode_paral ',mode
-   MSG_BUG(msg)
+   ABI_BUG(msg)
  end if
  !
  ! === Print out matrix ===
@@ -4012,7 +4015,7 @@ subroutine print_arr2d_dpc(arr,max_r,max_c,unit,mode_paral)
 
  if (mode/='COLL'.and.mode/='PERS') then
    write(msg,'(2a)')'Wrong value of mode_paral ',mode
-   MSG_BUG(msg)
+   ABI_BUG(msg)
  end if
  !
  ! === Print out matrix ===
@@ -4354,7 +4357,7 @@ subroutine remove_copies(n_in,set_in,n_out,is_equal)
 
 ! *************************************************************************
 
- ABI_DATATYPE_ALLOCATE(Ap,(n_in))
+ ABI_MALLOC(Ap,(n_in))
  Ap(1)%idx = 1
  Ap(1)%rpt => set_in(:,1)
 
@@ -4385,7 +4388,7 @@ subroutine remove_copies(n_in,set_in,n_out,is_equal)
    end do
  end if
 
- ABI_DATATYPE_DEALLOCATE(Ap)
+ ABI_FREE(Ap)
 
 end subroutine remove_copies
 !!***
@@ -4464,7 +4467,7 @@ integer function mincm(ii,jj)
 !************************************************************************
 
  if (ii==0.or.jj==0) then
-   MSG_BUG('ii==0 or jj==0')
+   ABI_BUG('ii==0 or jj==0')
  end if
 
  mincm=MAX(ii,jj)
@@ -4553,7 +4556,7 @@ subroutine continued_fract(nlev,term_type,aa,bb,nz,zpts,spectrum)
    ! Be careful with the sign of the SQRT.
    div(:) = half*(bb(nlev)/(bb_inf))**2 * ( zpts-aa_inf - SQRT((zpts-aa_inf)**2 - four*bb_inf**2) )
  case (2)
-   MSG_ERROR("To be tested")
+   ABI_ERROR("To be tested")
    div = zero
    if (nlev>4) then
      bg=zero; bu=zero
@@ -4579,7 +4582,7 @@ subroutine continued_fract(nlev,term_type,aa,bb,nz,zpts,spectrum)
 
  case default
    write(msg,'(a,i0)')" Wrong value for term_type : ",term_type
-   MSG_ERROR(msg)
+   ABI_ERROR(msg)
  end select
 
  do it=nlev,2,-1
@@ -4678,7 +4681,7 @@ subroutine cmplx_sphcart(carr, from, units)
 
  case default
    msg = " Wrong value for from: "//TRIM(from)
-   MSG_BUG(msg)
+   ABI_BUG(msg)
  end select
 
 end subroutine cmplx_sphcart
@@ -4738,7 +4741,7 @@ subroutine pfactorize(nn,nfactors,pfactors,powers)
  end do fact_loop
 
  if ( nn /= tnn * PRODUCT( pfactors**powers(1:nfactors)) ) then
-   MSG_BUG('nn/=tnn!')
+   ABI_BUG('nn/=tnn!')
  end if
 
  powers(nfactors+1) = tnn
@@ -4808,7 +4811,7 @@ function isordered_rdp(nn,arr,direction,tol) result(isord)
 
  CASE DEFAULT
    msg = "Wrong direction: "//TRIM(direction)
-   MSG_ERROR(msg)
+   ABI_ERROR(msg)
  END SELECT
 
 end function isordered_rdp
@@ -4816,13 +4819,12 @@ end function isordered_rdp
 
 !----------------------------------------------------------------------
 
-
 !!****f* m_numeric_tools/stats_eval
 !! NAME
 !!  stats_eval
 !!
 !! FUNCTION
-!!  Helper function used to calculate the statistical parameters of a data set.
+!!  Helper function used to calculate the statistical parameters of a dataset.
 !!
 !! INPUT
 !!  arr(:)=Array with the values.
@@ -4852,13 +4854,11 @@ pure function stats_eval(arr) result(stats)
 
 ! *************************************************************************
 
- !@stats_t
  stats%min   = +HUGE(one)
  stats%max   = -HUGE(one)
  stats%mean  = zero
 
  nn = SIZE(arr)
-
  do ii=1,nn
    xx = arr(ii)
    stats%max  = MAX(stats%max, xx)
@@ -4981,9 +4981,9 @@ end subroutine wrap2_pmhalf
 
 !----------------------------------------------------------------------
 
-!!****f* m_numeric_tools/interpol3d
+!!****f* m_numeric_tools/interpol3d_0d
 !! NAME
-!! interpol3d
+!! interpol3d_0d
 !!
 !! FUNCTION
 !! Computes the value at any point r by linear interpolation
@@ -5008,7 +5008,7 @@ end subroutine wrap2_pmhalf
 !!
 !! SOURCE
 
-pure function interpol3d(r, nr1, nr2, nr3, grid) result(res)
+pure function interpol3d_0d(r, nr1, nr2, nr3, grid) result(res)
 
 !Arguments-------------------------------------------------------------
 !scalars
@@ -5020,6 +5020,7 @@ pure function interpol3d(r, nr1, nr2, nr3, grid) result(res)
 !Local variables--------------------------------------------------------
 !scalars
  integer :: ir1,ir2,ir3,pr1,pr2,pr3
+ real(dp) :: res1,res2,res3,res4,res5,res6,res7,res8
  real(dp) :: x1,x2,x3
 
 ! *************************************************************************
@@ -5032,17 +5033,86 @@ pure function interpol3d(r, nr1, nr2, nr3, grid) result(res)
  x3=one+r(3)*nr3-real(ir3)
 
 !calculation of the density value
- res=zero
- res=res + grid(ir1, ir2, ir3) * (one-x1)*(one-x2)*(one-x3)
- res=res + grid(pr1, ir2, ir3) * x1*(one-x2)*(one-x3)
- res=res + grid(ir1, pr2, ir3) * (one-x1)*x2*(one-x3)
- res=res + grid(ir1, ir2, pr3) * (one-x1)*(one-x2)*x3
- res=res + grid(pr1, pr2, ir3) * x1*x2*(one-x3)
- res=res + grid(ir1, pr2, pr3) * (one-x1)*x2*x3
- res=res + grid(pr1, ir2, pr3) * x1*(one-x2)*x3
- res=res + grid(pr1, pr2, pr3) * x1*x2*x3
+ res1=grid(ir1, ir2, ir3) * (one-x1)*(one-x2)*(one-x3)
+ res2=grid(pr1, ir2, ir3) * x1*(one-x2)*(one-x3)
+ res3=grid(ir1, pr2, ir3) * (one-x1)*x2*(one-x3)
+ res4=grid(ir1, ir2, pr3) * (one-x1)*(one-x2)*x3
+ res5=grid(pr1, pr2, ir3) * x1*x2*(one-x3)
+ res6=grid(ir1, pr2, pr3) * (one-x1)*x2*x3
+ res7=grid(pr1, ir2, pr3) * x1*(one-x2)*x3
+ res8=grid(pr1, pr2, pr3) * x1*x2*x3
+ res=res1+res2+res3+res4+res5+res6+res7+res8
 
-end function interpol3d
+end function interpol3d_0d
+!!***
+
+!----------------------------------------------------------------------
+
+!!****f* m_numeric_tools/interpol3d_1d
+!! NAME
+!! interpol3d_1d
+!!
+!! FUNCTION
+!! Computes the value at any point r by linear interpolation
+!! inside the eight vertices of the surrounding cube
+!! r is presumed to be normalized, in a unit cube for the full grid
+!!
+!! INPUTS
+!! r(3)=point coordinate
+!! nr1=grid size along x
+!! nr2=grid size along y
+!! nr3=grid size along z
+!! grid(nd,nr1,nr2,nr3)=grid matrix
+!!
+!! OUTPUT
+!! res(nd)=Interpolated value
+!!
+!! PARENTS
+!!      integrate_gamma_alt,lin_interpq_gam,lineint,m_nesting,m_qparticles
+!!      planeint,pointint,volumeint
+!!
+!! CHILDREN
+!!
+!! SOURCE
+
+pure function interpol3d_1d(r, nr1, nr2, nr3, grid, nd) result(res)
+
+!Arguments-------------------------------------------------------------
+!scalars
+ integer,intent(in) :: nr1, nr2, nr3, nd
+ real(dp) :: res(nd)
+!arrays
+ real(dp),intent(in) :: grid(nd,nr1,nr2,nr3),r(3)
+
+!Local variables--------------------------------------------------------
+!scalars
+ integer :: id,ir1,ir2,ir3,pr1,pr2,pr3
+ real(dp) :: res1,res2,res3,res4,res5,res6,res7,res8
+ real(dp) :: x1,x2,x3
+
+! *************************************************************************
+
+ call interpol3d_indices (r,nr1,nr2,nr3,ir1,ir2,ir3, pr1,pr2,pr3)
+
+!weight
+ x1=one+r(1)*nr1-real(ir1)
+ x2=one+r(2)*nr2-real(ir2)
+ x3=one+r(3)*nr3-real(ir3)
+
+!calculation of the density value
+ do id=1,nd
+   res1=grid(id,ir1, ir2, ir3) * (one-x1)*(one-x2)*(one-x3)
+   res2=grid(id,pr1, ir2, ir3) * x1*(one-x2)*(one-x3)
+   res3=grid(id,ir1, pr2, ir3) * (one-x1)*x2*(one-x3)
+   res4=grid(id,ir1, ir2, pr3) * (one-x1)*(one-x2)*x3
+   res5=grid(id,pr1, pr2, ir3) * x1*x2*(one-x3)
+   res6=grid(id,ir1, pr2, pr3) * (one-x1)*x2*x3
+   res7=grid(id,pr1, ir2, pr3) * x1*(one-x2)*x3
+   res8=grid(id,pr1, pr2, pr3) * x1*x2*x3
+   res(id)=res1+res2+res3+res4+res5+res6+res7+res8
+ enddo
+
+end function interpol3d_1d
 !!***
 
 !----------------------------------------------------------------------
@@ -5158,17 +5228,8 @@ subroutine interpolate_denpot(cplex, in_ngfft, nspden, in_rhor, out_ngfft, out_r
 !scalars
  integer :: ispden, ir1, ir2, ir3, ifft
  real(dp) :: rr(3)
- real(dp),allocatable :: re(:,:),im(:,:)
 
 ! *************************************************************************
-
- if (cplex == 2) then
-   ! copy slices for efficiency reasons (the best would be to have stride option in interpol3d)
-   ABI_MALLOC(re, (product(in_ngfft), nspden))
-   ABI_MALLOC(im, (product(in_ngfft), nspden))
-   re = in_rhor(1, :, :)
-   im = in_rhor(2, :, :)
- end if
 
  ! Linear interpolation.
  do ispden=1,nspden
@@ -5179,21 +5240,11 @@ subroutine interpolate_denpot(cplex, in_ngfft, nspden, in_rhor, out_ngfft, out_r
        do ir1=0,out_ngfft(1)-1
          rr(1) = DBLE(ir1)/out_ngfft(1)
          ifft = 1 + ir1 + ir2*out_ngfft(1) + ir3*out_ngfft(1)*out_ngfft(2)
-         if (cplex == 1) then
-           out_rhor(1, ifft, ispden) = interpol3d(rr, in_ngfft(1), in_ngfft(2), in_ngfft(3), in_rhor(1, :, ispden))
-         else
-           out_rhor(1, ifft, ispden) = interpol3d(rr, in_ngfft(1), in_ngfft(2), in_ngfft(3), re(:, ispden))
-           out_rhor(2, ifft, ispden) = interpol3d(rr, in_ngfft(1), in_ngfft(2), in_ngfft(3), im(:, ispden))
-         end if
+         out_rhor(1:cplex, ifft, ispden) = interpol3d_1d(rr, in_ngfft(1), in_ngfft(2), in_ngfft(3), in_rhor(:, :, ispden),cplex)
        end do
      end do
    end do
  end do
-
- if (cplex == 2) then
-   ABI_FREE(re)
-   ABI_FREE(im)
- end if
 
 end subroutine interpolate_denpot
 !!***
@@ -5246,7 +5297,7 @@ subroutine simpson_int(npts, step, values, int_values)
 
  if (npts < 6) then
    write(msg,"(a,i0)")"Number of points in integrand function must be >=6 while it is: ",npts
-   MSG_ERROR(msg)
+   ABI_ERROR(msg)
  end if
 
 !-----------------------------------------------------------------
@@ -5735,15 +5786,15 @@ real(dp) function central_finite_diff(order, ipos, npts) result(fact)
    if (ipos < 1 .or. ipos > 7 .or. npts /= 7) goto 10
    fact = d6(ipos)
  case default
-   MSG_ERROR(sjoin("No entry for ipos:",itoa(ipos),"order", itoa(order), "npts", itoa(npts)))
+   ABI_ERROR(sjoin("No entry for ipos:",itoa(ipos),"order", itoa(order), "npts", itoa(npts)))
  end select
 
  if (fact == empty) then
-   MSG_ERROR(sjoin("Invalid ipos:",itoa(ipos),"for order", itoa(order), "npts", itoa(npts)))
+   ABI_ERROR(sjoin("Invalid ipos:",itoa(ipos),"for order", itoa(order), "npts", itoa(npts)))
  end if
  return
 
-10 MSG_ERROR(sjoin("No entry for ipos:",itoa(ipos),"order", itoa(order), "npts", itoa(npts)))
+10 ABI_ERROR(sjoin("No entry for ipos:",itoa(ipos),"order", itoa(order), "npts", itoa(npts)))
 
 end function central_finite_diff
 !!***
@@ -5786,7 +5837,7 @@ function uniformrandom(seed)
  integer :: kk
  real(dp) :: im1inv,im2inv
  real(dp), save :: table(97)
- character(len=500) :: message
+ character(len=500) :: msg
 
 ! *********************************************************************
 
@@ -5819,8 +5870,8 @@ function uniformrandom(seed)
  ii3=mod(ia3*ii3+ic3,im3)
  kk=1+(97*ii3)/im3
  if (kk<1.or.kk>97) then
-   write(message,'(a,2i0,a)' ) ' trouble in uniformrandom; ii3,kk=',ii3,kk,' =>stop'
-   MSG_ERROR(message)
+   write(msg,'(a,2i0,a)' ) ' trouble in uniformrandom; ii3,kk=',ii3,kk,' =>stop'
+   ABI_ERROR(msg)
  end if
  uniformrandom=table(kk)
 
@@ -5896,7 +5947,7 @@ subroutine findmin(dedv_1,dedv_2,dedv_predict,&
  real(dp) :: aa,bb,bbp,cc,ccp,d_lambda,dd
  real(dp) :: discr,ee,eep,lambda_shift,sum1,sum2,sum3,uu
  real(dp) :: uu3,vv,vv3
- character(len=500) :: message
+ character(len=500) :: msg
 
 ! *************************************************************************
 
@@ -5913,8 +5964,7 @@ subroutine findmin(dedv_1,dedv_2,dedv_predict,&
 !ENDDEBUG
 
  if(abs(lambda_1-1.0_dp)>tol12 .or. abs(lambda_2)>tol12) then
-   message = '  For choice=4, lambda_1 must be 1 and lambda_2 must be 0.'
-   MSG_BUG(message)
+   ABI_BUG('For choice=4, lambda_1 must be 1 and lambda_2 must be 0.')
  end if
 
 !Evaluate quartic interpolation
@@ -5937,21 +5987,20 @@ subroutine findmin(dedv_1,dedv_2,dedv_predict,&
    d2edv2_predict=0.0
 
 !  Even if there is a problem, try to keep going ...
-   message = 'The 2nd degree equation has no positive root (choice=4).'
-   MSG_WARNING(message)
+   ABI_WARNING('The 2nd degree equation has no positive root (choice=4).')
    status=2
    if(etotal_1<etotal_2)then
-     write(message, '(a,a,a)' )&
-&     'Will continue, since the new total energy is lower',ch10,&
-&     'than the old. Take a larger step in the same direction.'
-     MSG_COMMENT(message)
+     write(msg, '(a,a,a)' )&
+      'Will continue, since the new total energy is lower',ch10,&
+      'than the old. Take a larger step in the same direction.'
+     ABI_COMMENT(msg)
      lambda_predict=2.5_dp
    else
-     write(message, '(a,a,a,a,a)' )&
-&     'There is a problem, since the new total energy is larger',ch10,&
-&     'than the old (choice=4).',ch10,&
-&     'I take a point between the old and new, close to the old .'
-     MSG_COMMENT(message)
+     write(msg, '(a,a,a,a,a)' )&
+     'There is a problem, since the new total energy is larger',ch10,&
+     'than the old (choice=4).',ch10,&
+     'I take a point between the old and new, close to the old .'
+     ABI_COMMENT(msg)
      lambda_predict=0.25_dp
    end if
 !  Mimick a zero-gradient lambda, in order to avoid spurious
@@ -6014,18 +6063,18 @@ subroutine findmin(dedv_1,dedv_2,dedv_predict,&
 
  end if
 
- write(message, '(a,i3)' )'   line minimization, algorithm ',4
- call wrtout(std_out,message,'COLL')
- write(message, '(a,a)' )'                        lambda      etotal ','           dedv        d2edv2    '
- call wrtout(std_out,message,'COLL')
- write(message, '(a,es12.4,es18.10,2es12.4)' )'   old point         :',lambda_2,etotal_2,dedv_2,d2edv2_2
- call wrtout(std_out,message,'COLL')
- write(message, '(a,es12.4,es18.10,2es12.4)' )'   new point         :',lambda_1,etotal_1,dedv_1,d2edv2_1
- call wrtout(std_out,message,'COLL')
- write(message, '(a,es12.4,es18.10,2es12.4)' )'   predicted point   :',lambda_predict,etotal_predict,dedv_predict,d2edv2_predict
- call wrtout(std_out,message,'COLL')
- write(message, '(a)' ) ' '
- call wrtout(std_out,message,'COLL')
+ write(msg, '(a,i3)' )'   line minimization, algorithm ',4
+ call wrtout(std_out,msg,'COLL')
+ write(msg, '(a,a)' )'                        lambda      etotal ','           dedv        d2edv2    '
+ call wrtout(std_out,msg,'COLL')
+ write(msg, '(a,es12.4,es18.10,2es12.4)' )'   old point         :',lambda_2,etotal_2,dedv_2,d2edv2_2
+ call wrtout(std_out,msg,'COLL')
+ write(msg, '(a,es12.4,es18.10,2es12.4)' )'   new point         :',lambda_1,etotal_1,dedv_1,d2edv2_1
+ call wrtout(std_out,msg,'COLL')
+ write(msg, '(a,es12.4,es18.10,2es12.4)' )'   predicted point   :',lambda_predict,etotal_predict,dedv_predict,d2edv2_predict
+ call wrtout(std_out,msg,'COLL')
+ write(msg, '(a)' ) ' '
+ call wrtout(std_out,msg,'COLL')
 
 end subroutine findmin
 !!***
@@ -6089,10 +6138,10 @@ subroutine kramerskronig(nomega,omega,eps,method,only_check)
  do ii=2,nomega
    if (ABS(domega-(omega(ii)-omega(ii-1))) > 0.001) then
      if (only_check/=1) then
-       MSG_WARNING("Check cannot be performed since the frequency step is not constant")
+       ABI_WARNING("Check cannot be performed since the frequency step is not constant")
        RETURN
      else
-       MSG_ERROR('Cannot perform integration since frequency step is not constant')
+       ABI_ERROR('Cannot perform integration since frequency step is not constant')
      end if
    end if
  end do
@@ -6100,10 +6149,10 @@ subroutine kramerskronig(nomega,omega,eps,method,only_check)
 !Check whether omega(1) is small or not
  if (omega(1) > 0.1/Ha_eV) then
    if (only_check/=1) then
-     MSG_WARNING('Check cannot be performed since first frequency on the grid > 0.1 eV')
+     ABI_WARNING('Check cannot be performed since first frequency on the grid > 0.1 eV')
      RETURN
    else
-     MSG_ERROR('Cannot perform integration since first frequency on the grid > 0.1 eV')
+     ABI_ERROR('Cannot perform integration since first frequency on the grid > 0.1 eV')
    end if
  end if
 
@@ -6114,7 +6163,7 @@ subroutine kramerskronig(nomega,omega,eps,method,only_check)
 &   'Im epsilon for omega = ',omega(nomega)*Ha_eV,' eV',ch10,&
 &   'is not yet zero, epsilon_2 = ',AIMAG(eps(nomega)),ch10,&
 &   'Kramers Kronig could give wrong results'
-   MSG_WARNING(msg)
+   ABI_WARNING(msg)
    if (enough==50) then
      write(msg,'(3a)')' sufficient number of WARNINGS-',ch10,' stop writing '
      call wrtout(std_out,msg,'COLL')
@@ -6156,7 +6205,7 @@ subroutine kramerskronig(nomega,omega,eps,method,only_check)
 
  case default
    write(msg,'(a,i0)')' Wrong value for method ',method
-   MSG_BUG(msg)
+   ABI_BUG(msg)
  end select
 
 !at this point real part is in e1kk, need to put it into eps

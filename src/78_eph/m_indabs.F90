@@ -154,7 +154,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  complex(dpc),allocatable :: vmat(:,:,:,:,:)
 
  if (psps%usepaw == 1) then
-   MSG_ERROR("PAW not implemented")
+   ABI_ERROR("PAW not implemented")
    ABI_UNUSED((/pawang%nsym, pawrad(1)%mesh_size/))
  end if
 
@@ -336,7 +336,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
    ! Interpolation setup taken from m_gkk
    interpolated = 0
    if (dtset%eph_use_ftinterp /= 0) then
-     !MSG_WARNING(sjoin("Enforcing FT interpolation for q-point", ktoa(qpt)))
+     ABI_WARNING(sjoin("Enforcing FT interpolation for q-point", ktoa(qpt)))
      comm_rpt = xmpi_comm_self
      call dvdb%ftinterp_setup(dtset%ddb_ngqpt, 1, dtset%ddb_shiftq, nfftf, ngfftf, comm_rpt)
      call dvdb%ftinterp_qpt(qpt, nfftf, ngfftf, v1scf, dvdb%comm_rpt)
@@ -350,7 +350,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
        ! This call allocates v1scf(cplex, nfftf, nspden, 3*natom))
        call dvdb%readsym_allv1(db_iqpt, cplex, nfftf, ngfftf, v1scf, comm)
      else
-       MSG_WARNING(sjoin("Cannot find q-point:", ktoa(qpt), "in DVDB file"))
+       ABI_WARNING(sjoin("Cannot find q-point:", ktoa(qpt), "in DVDB file"))
      end if
    end if
 

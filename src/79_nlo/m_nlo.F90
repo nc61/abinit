@@ -183,7 +183,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  end do !itim
 
  htetra = tetra_from_kptrlatt(cryst, ebands%kptopt, ebands%kptrlatt, ebands%nshiftk, ebands%shiftk, ebands%nkpt, ebands%kptns, comm, msg, ierr)
- if (ierr /= 0) MSG_ERROR(msg)
+ if (ierr /= 0) ABI_ERROR(msg)
  max_occ = two/ebands%nspinor
 
 
@@ -242,7 +242,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
       end do !ik
     end do !isppol
     call xmpi_sum(transrate_tensor, comm, ierr)
-    if (ierr /= 0) MSG_ERROR("Error in xmpi sum for transition rate")
+    if (ierr /= 0) ABI_ERROR("Error in xmpi sum for transition rate")
  end if 
  do idir=1,3
    do jdir=1,idir-1
@@ -387,7 +387,7 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  end do !itim
 
  htetra = tetra_from_kptrlatt(cryst, ebands%kptopt, ebands%kptrlatt, ebands%nshiftk, ebands%shiftk, ebands%nkpt, ebands%kptns, comm, msg, ierr)
- if (ierr /= 0) MSG_ERROR(msg)
+ if (ierr /= 0) ABI_ERROR(msg)
  mband = ebands%mband
  max_occ = two/ebands%nspinor
 
@@ -478,7 +478,7 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
       end do !ik
     end do !isppol
     call xmpi_sum(transrate_tensor, comm, ierr)
-    if (ierr /= 0) MSG_ERROR("Error in xmpi sum for transition rate")
+    if (ierr /= 0) ABI_ERROR("Error in xmpi sum for transition rate")
  
  trans_rate = zero
 

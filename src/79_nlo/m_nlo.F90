@@ -664,15 +664,15 @@ subroutine d2pa_coefs(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1,
  !alpha2_d = 4_dp/(3.5**2*137**2*wmesh*w2**2)*trans_rate
  alpha2_d = 4_dp/(3.5**2*137**2*wmesh**3)*trans_rate
  alpha2_d(1) = zero
- alpha2_d = alpha2_d*29.36_dp
+ alpha2_d = alpha2_d*29.36_dp*26.2_dp/27.2_dp
 
  if (my_rank == master) then
    fname = trim(fname_root)//'_d2pa.out'
    funit = get_unit()
    open(funit, file = fname)
    do iw = 1,nw
-     !write(funit, *) 26.2*(w2 + wmesh(iw)), alpha2_d(iw)
-     write(funit, *) 26.2*(2*wmesh(iw)), alpha2_d(iw)
+     !write(funit, *) 27.2*(w2 + wmesh(iw)), alpha2_d(iw)
+     write(funit, *) 27.2*(2*wmesh(iw)), alpha2_d(iw)
    end do
    close(funit)
  end if

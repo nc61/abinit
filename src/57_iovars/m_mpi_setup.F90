@@ -1546,6 +1546,8 @@ end subroutine mpi_setup
      write(ount,'(a)')'#Autoparal section for GS calculations with paral_kgb'
    else if (optdriver==RUNL_RESPFN) then
      write(ount,'(a)')'#Autoparal section for DFPT calculations'
+   else if (optdriver==RUNL_WFK) then
+     write(ount,'(a)')'#Autoparal section for DFPT calculations'
    else
      ABI_ERROR(sjoin('Unsupported optdriver:', itoa(optdriver)))
    end if

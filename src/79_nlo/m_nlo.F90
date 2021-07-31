@@ -171,8 +171,6 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  call ebands_apply_scissors(ebands, scissor)
 
  timrev = kpts_timrev_from_kptopt(ebands%kptopt)
- print *, "Timrev"
- print *, timrev
  ABI_MALLOC(pol_rotated, (3, cryst%nsym*(timrev + 1)))
 
  do itim = 0,timrev
@@ -186,64 +184,65 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  if (ierr /= 0) ABI_ERROR(msg)
  max_occ = two/ebands%nspinor
 
+ !TODO:change
+ intmeth = 1
+ print *, "Temperature", dtset%tphysel
 
  transrate_tensor = zero
- if (ebands%kptopt == 3) then !all k points are inequivalent
-   ! do nothing
- else if (ebands%kptopt == 1) then
-    do isppol = 1,ebands%nsppol   
-      !For debugging purposes, set the vk array to NaN to make sure we're actually assigning
-      vk = anan/anan
-      do ik = my_start,my_stop
-        !vk(3,mband,mband) are matrix elements between bands at given ik (in irreducible wedge) 
-        vk = zero
-        npw_k = wfd%npwarr(ik); istwf_k = wfd%istwfk(ik)
-        ! ik loop outside so this is only called once per k point
-        call ddkop%setup_spin_kpoint(dtset, cryst, psps, isppol, ebands%kptns(:,ik), istwf_k, npw_k, wfd%kdata(ik)%kg_k)
-        ! Precompute all needed matrix elements in IBZ
-        do sband = 1,mband
-          call wfd%copy_cg(sband,ik,isppol,cg_ket)
-          call ddkop%apply(ebands%eig(sband,ik,isppol), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
-          do fband = sband,mband       
-            ! Don't bother computing if they have the same population
-            if (abs(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)) .lt. 1.0d-12) cycle
-            call wfd%copy_cg(fband,ik,isppol,cg_bra)
-            v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, ebands%nspinor, cg_bra, mode="cart")
-            ! renorm? Just seems to make errors larger.
-            renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
-            !renorm_factor = one
-            vk(:,sband,fband) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
-          end do !fband
-        end do !sband
+ do isppol = 1,ebands%nsppol   
+   do ik = my_start,my_stop
+     !vk(3,mband,mband) are matrix elements between bands at given ik (in irreducible wedge) 
+     vk = zero
+     npw_k = wfd%npwarr(ik); istwf_k = wfd%istwfk(ik)
+     ! ik loop outside so this is only called once per k point
+     call ddkop%setup_spin_kpoint(dtset, cryst, psps, isppol, ebands%kptns(:,ik), istwf_k, npw_k, wfd%kdata(ik)%kg_k)
+     ! Precompute all needed matrix elements in IBZ
+     do sband = 1,(mband-dtset%nbdbuf)
+       call wfd%copy_cg(sband,ik,isppol,cg_ket)
+       call ddkop%apply(ebands%eig(sband,ik,isppol), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
+       do fband = sband,(mband-dtset%nbdbuf)   
+         ! Don't bother computing if they have the same population
+         if (abs(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)) .lt. 1.0d-12) cycle
+         call wfd%copy_cg(fband,ik,isppol,cg_bra)
+         v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, ebands%nspinor, cg_bra, mode="cart")
+         renorm_factor = one + (scissor)/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
+         vk(:,sband,fband) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
+       end do !fband
+     end do !sband
 
-        
-        ! Loop over bands on outside allows us to only compute tetrahedron weights once
-        do sband = 1,mband
-          ! fband loop starts as sband to avoid double counting transitions
-          do fband = sband,mband
-            population_diff = ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)
-            ! Population filter again
-            if (abs(population_diff) .lt. 1.0d-12) cycle
-            energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol)
-            ! get weights
-            call htetra%get_onewk_wvals(ik, 0, nw, wmesh, max_occ, ebands%nkpt, energy_fs, weights)
-            ! filter based on weights
-            if (all(abs(weights(:,1)) .lt. 1.0d-12)) cycle
-            vk_sf = vk(:,sband,fband)
-            do idir = 1,3
-              do jdir = idir,3
-                integrand(:,idir,jdir) = weights(:,1)*conjg(vk_sf(idir))*vk_sf(jdir)
-              end do !idir
-            end do !jdir
+     
+     ! Loop over bands on outside allows us to only compute tetrahedron weights once
+     do sband = 1,(mband-dtset%nbdbuf)
+       ! fband loop starts as sband to avoid double counting transitions
+       do fband = sband,(mband-dtset%nbdbuf)
+         population_diff = ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)
+         ! Population filter again
+         if (abs(population_diff) .lt. 1.0d-12) cycle
+         energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol)
 
-            transrate_tensor = transrate_tensor + integrand*population_diff*ebands%wtk(ik)
-          end do !fband
-        end do !sband
-      end do !ik
-    end do !isppol
-    call xmpi_sum(transrate_tensor, comm, ierr)
-    if (ierr /= 0) ABI_ERROR("Error in xmpi sum for transition rate")
- end if 
+         ! get weights
+         if (intmeth == 1) then
+           call htetra%get_onewk_wvals(ik, 0, nw, wmesh, max_occ, ebands%nkpt, energy_fs, weights)
+         else if (intmeth == 2) then
+           weights(:,1) = max_occ*gaussian(wmesh - energy_fs(ik), 0.0005_dp)
+         end if
+         ! filter based on weights
+         if (all(abs(weights(:,1)) .lt. 1.0d-12)) cycle
+         vk_sf = vk(:,sband,fband)
+         do idir = 1,3
+           do jdir = idir,3
+             integrand(:,idir,jdir) = weights(:,1)*conjg(vk_sf(idir))*vk_sf(jdir)
+           end do !idir
+         end do !jdir
+
+         transrate_tensor = transrate_tensor + integrand*population_diff*ebands%wtk(ik)
+       end do !fband
+     end do !sband
+   end do !ik
+ end do !isppol
+ call xmpi_sum(transrate_tensor, comm, ierr)
+ if (ierr /= 0) ABI_ERROR("Error in xmpi sum for transition rate")
+
  do idir=1,3
    do jdir=1,idir-1
      transrate_tensor(:,idir,jdir) = conjg(transrate_tensor(:,jdir,idir))
@@ -264,6 +263,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
 
   call htetra%free
   call pawcprj_free(cwaveprj0)
+  ABI_FREE(cwaveprj0)
   ABI_FREE(pol_rotated)
   ABI_FREE(cg_ket)
   ABI_FREE(cg_bra)
@@ -413,7 +413,8 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
             v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, ebands%nspinor, cg_bra, mode="cart")
             ! renorm? Just seems to make errors larger.
             renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
-            renorm_factor = one
+            renorm_factor = one + (scissor)/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
+            !renorm_factor = one
             vk(:,sband,fband) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
             vk(:,fband,sband) = conjg(vk(:,sband,fband))
           end do !fband

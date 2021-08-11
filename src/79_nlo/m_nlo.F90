@@ -152,8 +152,8 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  ABI_FREE(nband)
 
  mpw = maxval(wfd%npwarr)
- print *, "mpw"
- print *, mpw
+ !print *, "mpw"
+ !print *, mpw
 
  step = (wmax - wmin)/(nw - 1)
  wmesh = arth(wmin, step, nw)
@@ -185,8 +185,8 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  if (ierr /= 0) ABI_ERROR(msg)
  max_occ = two/ebands%nspinor
 
- print *, "mband", mband
- print *, "ivalence", dtset%ivalence
+ !print *, "mband", mband
+ !print *, "ivalence", dtset%ivalence
  !TODO:change
  intmeth = 1
  
@@ -194,17 +194,19 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
    fermi_holes = dtset%dfield(1)
    fermi_electrons = dtset%dfield(2)
    carrier_temp = dtset%dfield(3)
+   !print *, "Fermi electrons", fermi_electrons
+   !print *, "Fermi holes", fermi_holes
    do isppol = 1,ebands%nsppol
      do ik = my_start,my_stop
        do sband = 1,mband
-         print *, "sband minus", sband - dtset%ivalence
+         !print *, "sband minus", sband - dtset%ivalence
          if (sband .le. 4) then
-           print *, "sband data", sband, ebands%eig(sband,ik,isppol), fermi_holes
+           !print *, "sband data", sband, ebands%eig(sband,ik,isppol), fermi_holes
            ebands%occ(sband,ik,isppol) = max_occ*fermi_dirac(ebands%eig(sband,ik,isppol), fermi_holes, carrier_temp)
          else
            ebands%occ(sband,ik,isppol) = max_occ*fermi_dirac(ebands%eig(sband,ik,isppol), fermi_electrons, carrier_temp)
          end if
-           print *,"band", sband, "occ", ebands%occ(sband,ik,isppol), "energy ", ebands%eig(sband,ik,isppol)
+           !print *,"band", sband, "occ", ebands%occ(sband,ik,isppol), "energy ", ebands%eig(sband,ik,isppol)
        end do !sband
      end do !ik
    end do !isppol
@@ -238,7 +240,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
        ! fband loop starts as sband to avoid double counting transitions
        do fband = sband,mband
          population_diff = ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)
-         if (population_diff .lt. 0) print *, "negative pop", sband, fband, ik
+         !if (population_diff .lt. 0) print *, "negative pop", sband, fband, ik
          ! Population filter again
          if (abs(population_diff) .lt. 1.0d-12) cycle
          energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol)

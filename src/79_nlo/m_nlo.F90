@@ -49,7 +49,7 @@ module m_nlo
  use m_io_tools, only : get_unit, iomode_from_fname
  use m_numeric_tools, only: arth, simpson
  use m_symtk,    only : matr3inv
- use m_special_funcs,  only : gaussian
+ use m_special_funcs,  only : gaussian, fermi_dirac
  use m_time, only : timein
  use m_pawtab,         only : pawtab_type
  use m_fftcore, only : get_kg
@@ -65,7 +65,7 @@ module m_nlo
  public :: trans_rate_2pa
  public :: kk_linperm
  public :: linopt_coefs
- public :: d2pa_coefs
+ public :: coefs_2pa
  public :: wfd_read_all
  public :: print_matrix_elements
 !!***
@@ -101,6 +101,7 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  integer :: isym, itim, timrev, idir, jdir
  integer, parameter :: master=0
  real(dp) :: step, population_diff, renorm_factor, max_occ
+ real(dp) :: fermi_electrons,fermi_holes,carrier_temp
  type(htetra_t) :: htetra
  type(ddkop_t) :: ddkop 
  type(wfd_t) :: wfd
@@ -184,9 +185,30 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
  if (ierr /= 0) ABI_ERROR(msg)
  max_occ = two/ebands%nspinor
 
+ print *, "mband", mband
+ print *, "ivalence", dtset%ivalence
  !TODO:change
  intmeth = 1
- print *, "Temperature", dtset%tphysel
+ 
+ if (.true.) then
+   fermi_holes = dtset%dfield(1)
+   fermi_electrons = dtset%dfield(2)
+   carrier_temp = dtset%dfield(3)
+   do isppol = 1,ebands%nsppol
+     do ik = my_start,my_stop
+       do sband = 1,mband
+         print *, "sband minus", sband - dtset%ivalence
+         if (sband .le. 4) then
+           print *, "sband data", sband, ebands%eig(sband,ik,isppol), fermi_holes
+           ebands%occ(sband,ik,isppol) = max_occ*fermi_dirac(ebands%eig(sband,ik,isppol), fermi_holes, carrier_temp)
+         else
+           ebands%occ(sband,ik,isppol) = max_occ*fermi_dirac(ebands%eig(sband,ik,isppol), fermi_electrons, carrier_temp)
+         end if
+           print *,"band", sband, "occ", ebands%occ(sband,ik,isppol), "energy ", ebands%eig(sband,ik,isppol)
+       end do !sband
+     end do !ik
+   end do !isppol
+ end if
 
  transrate_tensor = zero
  do isppol = 1,ebands%nsppol   
@@ -197,10 +219,10 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
      ! ik loop outside so this is only called once per k point
      call ddkop%setup_spin_kpoint(dtset, cryst, psps, isppol, ebands%kptns(:,ik), istwf_k, npw_k, wfd%kdata(ik)%kg_k)
      ! Precompute all needed matrix elements in IBZ
-     do sband = 1,(mband-dtset%nbdbuf)
+     do sband = 1,mband
        call wfd%copy_cg(sband,ik,isppol,cg_ket)
        call ddkop%apply(ebands%eig(sband,ik,isppol), npw_k, ebands%nspinor, cg_ket, cwaveprj0)
-       do fband = sband,(mband-dtset%nbdbuf)   
+       do fband = sband,mband 
          ! Don't bother computing if they have the same population
          if (abs(ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)) .lt. 1.0d-12) cycle
          call wfd%copy_cg(fband,ik,isppol,cg_bra)
@@ -212,10 +234,11 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
 
      
      ! Loop over bands on outside allows us to only compute tetrahedron weights once
-     do sband = 1,(mband-dtset%nbdbuf)
+      do sband = 1,mband
        ! fband loop starts as sband to avoid double counting transitions
-       do fband = sband,(mband-dtset%nbdbuf)
+       do fband = sband,mband
          population_diff = ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)
+         if (population_diff .lt. 0) print *, "negative pop", sband, fband, ik
          ! Population filter again
          if (abs(population_diff) .lt. 1.0d-12) cycle
          energy_fs = ebands%eig(fband,:,isppol) - ebands%eig(sband,:,isppol)
@@ -271,14 +294,14 @@ subroutine trans_rate_1pa(bcorr, cryst, ebands, ngfft, nw, pol, scissor, trans_r
 end subroutine trans_rate_1pa
 
 !TODO: Fix this function, currently doesn't work
-subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, trans_rate, wmin, wmax, wmesh1, w2, comm, &
+subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, trans_rate, wmesh1, wmesh2, comm, &
 &                         dtset, pawtab, psps, wfk0_path)
 
 !Arguments ------------------------------------
 !scalars
  character(len=*),intent(in) :: wfk0_path
  integer,intent(in) :: bcorr, comm, nw
- real(dp),intent(in) :: scissor, wmin, wmax
+ real(dp),intent(in) :: scissor 
  type(crystal_t),intent(in) :: cryst
  type(ebands_t),intent(inout) :: ebands
  type(dataset_type),intent(in) :: dtset
@@ -289,8 +312,7 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  integer,intent(in) :: ngfft(18)
  complex(dpc),intent(in) :: pol1(3), pol2(3)
  real(dp),intent(out) :: trans_rate(nw)
- real(dp),intent(out) :: wmesh1(nw)
- real(dp),intent(in) :: w2
+ real(dp),intent(in) :: wmesh1(nw),wmesh2(nw)
 
 !Local variables ------------------------------
 !scalars
@@ -314,7 +336,7 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  complex(dpc) :: detuning_1(nw), detuning_2(nw)
  integer :: ik, my_start, my_stop, iw, nsym
  real(dp) :: klatt(3,3), rlatt(3,3), weights(nw,2), energy_fs(ebands%nkpt)
- real(dp) ::  v_bks(2,3), sym_inv_trans(3,3), wmesh2(nw)
+ real(dp) ::  v_bks(2,3), sym_inv_trans(3,3)
  real(dp),allocatable :: cg_ket(:,:), cg_bra(:,:)
  complex(dpc),allocatable :: pol1_rotated(:,:), pol2_rotated(:,:)
  type(pawcprj_type),allocatable :: cwaveprj0(:,:)
@@ -333,7 +355,6 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  ! Read in all wave functions (memory intensive)
  bks_mask = .False.; keep_ur = .False.
  bks_mask(1:dtset%mband,my_start:my_stop,:) = .true.
- print *, bks_mask
  ABI_MALLOC(wfd_istwfk, (ebands%nkpt))
  wfd_istwfk = 1
  nband = dtset%mband
@@ -350,16 +371,6 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  ABI_FREE(nband)
 
  mpw = maxval(wfd%npwarr)
- print *, "mpw"
- print *, mpw
-
- step = (wmax - wmin)/(nw - 1)
- wmesh1 = arth(wmin, step, nw)
- if (w2 .lt. zero) then
-   wmesh2 = wmesh1
- else
-   wmesh2 = w2
- end if
 
  rlatt = ebands%kptrlatt
  call matr3inv(rlatt, klatt)
@@ -368,7 +379,6 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  ABI_CALLOC(cg_bra, (2, mpw*ebands%nspinor))
  usecprj = 0
  ABI_MALLOC(cwaveprj0, (cryst%natom, ebands%nspinor*usecprj))
-
 
 !!WFD
  ddkop = ddkop_new(dtset, cryst, pawtab, psps, wfd%mpi_enreg, mpw, wfd%ngfft)
@@ -391,7 +401,6 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
  mband = ebands%mband
  max_occ = two/ebands%nspinor
 
- print *, "kptrlatt"
  nkpt_fbz = ebands%kptrlatt(1,1)*ebands%kptrlatt(2,2)*ebands%kptrlatt(3,3)
  intmeth = 1
  transrate_tensor = zero
@@ -451,8 +460,8 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
               vk_fi = vk(:,fband,iband)
               do idir = 1,3
                 do jdir = 1,3
-                  summand(:,idir,jdir) = vk_fi(idir)*vk_is(jdir)/(energy_is - wmesh1 + (0,0.000))  &
-&                                        + vk_fi(jdir)*vk_is(idir)/(energy_is - wmesh2 + (0,0.000))
+                  summand(:,idir,jdir) = vk_fi(idir)*vk_is(jdir)/(energy_is - wmesh1 + (0,0.01))  &
+&                                        + vk_fi(jdir)*vk_is(idir)/(energy_is - wmesh2 + (0,0.01))
                 end do !idir
               end do !jdir
                   if (any(abs(summand) .gt. 5000)) then
@@ -588,7 +597,6 @@ subroutine kk_linperm(eps_imag, len_abs, eps_real, wmesh)
  character(len=500) :: msg, errmsg, fname
  real(dp) :: trans_rate(nw),eps_mag(nw)
  real(dp) :: index_alpha(2,nw), eps(2,nw), wmesh(nw)
- complex(dpc),allocatable :: pmat(:,:,:,:,:)
 
 !************************************************************************
  my_rank = xmpi_comm_rank(comm)
@@ -611,7 +619,7 @@ subroutine kk_linperm(eps_imag, len_abs, eps_real, wmesh)
    fname = trim(fname_root)//'_linopt.out'
    open(funit, file = fname)
    do iw = 1,nw
-     write(funit, *) wmesh(iw), index_alpha(2,iw), index_alpha(1,iw), eps(1,iw), eps(2,iw)
+     write(funit, *) wmesh(iw), index_alpha(2,iw), index_alpha(1,iw), eps(1,iw), eps(2,iw), trans_rate(iw)
    end do
    close(funit)
  end if
@@ -621,18 +629,19 @@ subroutine kk_linperm(eps_imag, len_abs, eps_real, wmesh)
 
  end subroutine linopt_coefs
 
-subroutine d2pa_coefs(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1, pol2, scissor, w1min, w1max, w2, comm, dtset, psps, wfk0_path)
+subroutine coefs_2pa(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1, pol2, scissor, w1min, w1max, comm, dtset, psps, wfk0_path, w2)
 
 !Arguments ------------------------------------
 !scalars
  integer,intent(in) :: comm, bcorr
- real(dp),intent(in) :: scissor, w1min, w1max, w2
+ real(dp),intent(in) :: scissor, w1min, w1max
  type(crystal_t),intent(in) :: cryst
  type(ebands_t),intent(inout) :: ebands
  type(dataset_type),intent(in) :: dtset
  type(pseudopotential_type),intent(in) :: psps
  character(len=*),intent(in) :: wfk0_path
  type(pawtab_type),intent(in) :: pawtab(psps%ntypat*psps%usepaw)
+ real(dp),intent(in),optional :: w2
 
 !arrays
  complex(dpc),intent(in) :: pol1(3), pol2(3)
@@ -643,9 +652,9 @@ subroutine d2pa_coefs(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1,
 !Local variables ------------------------------
 !scalars
  integer :: ierr, funit, iw
- integer :: my_rank, nproc 
+ integer :: my_rank, nproc, pump_index 
  integer, parameter :: master=0
- real(dp) :: step, wmesh(nw)
+ real(dp) :: step, wmesh1(nw), wmesh2(nw)
  type(wfd_t) :: wfd
  
 !arrays
@@ -657,28 +666,34 @@ subroutine d2pa_coefs(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1,
  nproc   = xmpi_comm_size(comm) 
  
  step = (w1max - w1min)/(nw - 1)
- wmesh = arth(w1min, step, nw)
+ wmesh1 = arth(w1min, step, nw)
 
+ if (present(w2)) then
+   wmesh2 = w2
+ else
+   wmesh2 = wmesh1
+ end if
 
- call trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, trans_rate, w1min, w1max, wmesh, w2, comm, &
-&                     dtset, pawtab, psps, wfk0_path)
+   call trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, trans_rate, wmesh1, wmesh2, comm, &
+&                      dtset, pawtab, psps, wfk0_path)
+
  !alpha2_d = 4_dp/(3.5**2*137**2*wmesh*w2**2)*trans_rate
- alpha2_d = 4_dp/(3.5**2*137**2*wmesh**3)*trans_rate
+ alpha2_d = 4_dp/(3.5**2*137**2*wmesh1**3)*trans_rate
  alpha2_d(1) = zero
  alpha2_d = alpha2_d*29.36_dp*26.2_dp/27.2_dp
 
  if (my_rank == master) then
-   fname = trim(fname_root)//'_d2pa.out'
+   fname = trim(fname_root)//'_2pa.out'
    funit = get_unit()
    open(funit, file = fname)
    do iw = 1,nw
      !write(funit, *) 27.2*(w2 + wmesh(iw)), alpha2_d(iw)
-     write(funit, *) 27.2*(2*wmesh(iw)), alpha2_d(iw)
+     write(funit, *) 27.2*(2*wmesh1(iw)), alpha2_d(iw)
    end do
    close(funit)
  end if
 
- end subroutine d2pa_coefs
+ end subroutine coefs_2pa
 
  subroutine wfd_read_all(cryst, dtset, ebands, ngfft, pawtab, psps, wfd, wfk_path, comm)
 !Arguments ------------------------------------

@@ -400,9 +400,17 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
      !TODO: freqremax, freqremin, nfreqsp, opt_forces, freqspmax
      call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, [(one,zero), (zero,zero), (zero,zero)], dtset%dfpt_sciss, dtset%freqremax, comm, dtset, psps, wfk0_path)
    else if (dtset%optforces == 1) then
-     call coefs_2pa(1, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, &
- &                 [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
- &                  dtset%dfpt_sciss, dtset%freqremin, dtset%freqremax, comm, dtset, psps, wfk0_path, dtset%freqspmax)
+     if (dtset%freqspmax .gt. 0) then
+       call coefs_2pa(1, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, &
+   &                 [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
+   &                  dtset%dfpt_sciss, dtset%freqremin, dtset%freqremax, comm, dtset, psps, wfk0_path, dtset%freqspmax)
+       else 
+       print *, "Calling degenerate"
+       call coefs_2pa(1, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, &
+   &                 [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
+   &                  dtset%dfpt_sciss, dtset%freqremin, dtset%freqremax, comm, dtset, psps, wfk0_path)
+       
+       end if
    end if
 
  !case ("paw_aeden")

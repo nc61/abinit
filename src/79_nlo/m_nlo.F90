@@ -424,8 +424,8 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
             v_bks = ddkop%get_braket(ebands%eig(sband,ik,isppol),istwf_k, npw_k, ebands%nspinor, cg_bra, mode="cart")
             ! renorm? Just seems to make errors larger.
             renorm_factor = (ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol))/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
-            renorm_factor = one + (scissor)/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor)
-            !renorm_factor = one
+            !renorm_factor = sqrt(one + (scissor)/(ebands%eig(fband,ik,isppol) - ebands%eig(sband,ik,isppol) - scissor))
+            renorm_factor = one
             vk(:,sband,fband) = cmplx(v_bks(1,:), v_bks(2,:),kind=dp)*(renorm_factor)
             vk(:,fband,sband) = conjg(vk(:,sband,fband))
           end do !fband
@@ -433,10 +433,10 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
         
         ! Loop over bands on outside allows us to only compute tetrahedron weights once
         !do sband = 1,mband
-        do sband = 2,4
+        do sband = 1,mband 
           ! fband loop starts as sband to avoid double counting transitions
           !do fband = sband,mband
-          do fband = sband,5
+          do fband = sband,mband
             population_diff = ebands%occ(sband,ik,isppol) - ebands%occ(fband,ik,isppol)
             ! Population filter again
             if (abs(population_diff) .lt. 1.0d-12) cycle
@@ -462,8 +462,8 @@ subroutine trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, 
               vk_fi = vk(:,fband,iband)
               do idir = 1,3
                 do jdir = 1,3
-                  summand(:,idir,jdir) = vk_fi(idir)*vk_is(jdir)/(energy_is - wmesh1 + (0,0.01))  &
-&                                        + vk_fi(jdir)*vk_is(idir)/(energy_is - wmesh2 + (0,0.01))
+                  summand(:,idir,jdir) = vk_fi(idir)*vk_is(jdir)/(energy_is - wmesh1 + (0,0.005))  &
+&                                        + vk_fi(jdir)*vk_is(idir)/(energy_is - wmesh2 + (0,0.005))
                 end do !idir
               end do !jdir
                   if (any(abs(summand) .gt. 5000)) then
@@ -618,7 +618,7 @@ subroutine kk_linperm(eps_imag, len_abs, eps_real, wmesh)
 
  if (my_rank == master) then
    funit = get_unit()
-   fname = trim(fname_root)//'_linopt.out'
+   fname = 'linopt_OUT' 
    open(funit, file = fname)
    do iw = 1,nw
      write(funit, *) wmesh(iw), index_alpha(2,iw), index_alpha(1,iw), eps(1,iw), eps(2,iw), trans_rate(iw)
@@ -661,7 +661,7 @@ subroutine coefs_2pa(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1, 
  
 !arrays
  character(len=500) :: msg, errmsg, fname
- real(dp) :: trans_rate(nw), alpha2_d(nw)
+ real(dp) :: trans_rate(nw), alpha2(nw)
 
 !************************************************************************
  my_rank = xmpi_comm_rank(comm)
@@ -675,22 +675,23 @@ subroutine coefs_2pa(bcorr, cryst, ebands, fname_root, ngfft, nw, pawtab, pol1, 
  else
    wmesh2 = wmesh1
  end if
+ print *, "wmesh", wmesh2
 
    call trans_rate_2pa(bcorr, cryst, ebands, ngfft, nw, pol1, pol2, scissor, trans_rate, wmesh1, wmesh2, comm, &
 &                      dtset, pawtab, psps, wfk0_path)
 
- !alpha2_d = 4_dp/(3.5**2*137**2*wmesh*w2**2)*trans_rate
- alpha2_d = 4_dp/(3.5**2*137**2*wmesh1**3)*trans_rate
- alpha2_d(1) = zero
- alpha2_d = alpha2_d*29.36_dp*26.2_dp/27.2_dp
+ !alpha2 = 4_dp/(3.5**2*137**2*wmesh*w2**2)*trans_rate
+ alpha2 = 4_dp/(3.2**2*137**2*wmesh1**3)*trans_rate
+ alpha2(1) = zero
+ alpha2 = alpha2*29.36_dp*26.2_dp/27.2_dp
 
  if (my_rank == master) then
-   fname = trim(fname_root)//'_2pa.out'
+   fname = 'nd2pa_OUT' 
    funit = get_unit()
    open(funit, file = fname)
    do iw = 1,nw
-     !write(funit, *) 27.2*(w2 + wmesh(iw)), alpha2_d(iw)
-     write(funit, *) 27.2*(2*wmesh1(iw)), alpha2_d(iw)
+     !write(funit, *) 27.2*(w2 + wmesh(iw)), alpha2(iw)
+     write(funit, *) wmesh1(iw),  wmesh2(iw), alpha2(iw), trans_rate(iw)
    end do
    close(funit)
  end if

@@ -396,21 +396,23 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
    ABI_FREE(paw_onsite)
 
  case (WFK_TASK_OPTICS)
-   if (dtset%optforces == 0) then
+   if (dtset%optx_type == 1) then
      !TODO: freqremax, freqremin, nfreqsp, opt_forces, freqspmax
      call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, [(one,zero), (zero,zero), (zero,zero)], dtset%dfpt_sciss, dtset%freqremax, comm, dtset, psps, wfk0_path)
-   else if (dtset%optforces == 1) then
+   else if (dtset%optx_type == 2) then
      if (dtset%freqspmax .gt. 0) then
        call coefs_2pa(1, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, &
    &                 [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
    &                  dtset%dfpt_sciss, dtset%freqremin, dtset%freqremax, comm, dtset, psps, wfk0_path, dtset%freqspmax)
-       else 
+       else
        print *, "Calling degenerate"
        call coefs_2pa(1, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, &
    &                 [(one,zero), (zero,zero), (zero,zero)], [(one,zero),(zero,zero),(zero,zero)], &
    &                  dtset%dfpt_sciss, dtset%freqremin, dtset%freqremax, comm, dtset, psps, wfk0_path)
-       
+
        end if
+   else
+     MSG_ERROR(sjoin("Invalid value of optx_type", itoa(dtset%optx_type)))
    end if
 
  !case ("paw_aeden")

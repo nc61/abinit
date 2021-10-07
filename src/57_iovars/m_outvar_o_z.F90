@@ -246,6 +246,9 @@ contains
  intarr(1,:)=dtsets(:)%ortalg
  call prttagm(dprarr,intarr,iout,jdtset_,2,marr,1,narrm,ncid,ndtset_alloc,'ortalg','INT',0,firstchar=firstchar_gpu)
 
+ intarr(1,:)=dtsets(:)%optx_type
+ call prttagm(dprarr,intarr,iout,jdtset_,2,marr,1,narrm,ncid,ndtset_alloc,'optx_type','INT',0)
+
 !###########################################################
 !### 03. Print all the input variables (P)
 !##

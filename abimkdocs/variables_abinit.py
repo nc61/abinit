@@ -12708,7 +12708,7 @@ or half-occupied band, or other choices in special circumstances.
 
 If [[occopt]] is not 2, then the occupancies must be the same for each k point.
 If [[nsppol]]=1, the total number of arrays which must be provided is [[nband]], in order of increasing energy.
-If [[nsppol]]=2, the total number of arrays which must be provided is [[nband]]*[[nsppol]], 
+If [[nsppol]]=2, the total number of arrays which must be provided is [[nband]]*[[nsppol]],
 first spin up, in order of increasing electronic eigenenergy, then spin down, in order of increasing electronic eigenenergy.
 
 If [[occopt]] = 2, then the band occupancies must be provided explicitly for
@@ -22295,5 +22295,24 @@ may go out of memory for large systems.
 In this case, one can use [[rmm_diis_savemem]] = 1 to activate a version of RMM-DIIS that avoids these extra allocations.
 """,
 ),
+
+
+Variable(
+    abivarname="optx_type",
+    varset="basic",
+    vartype="integer",
+    topics=['OpticsNewVersion_basic'],
+    dimensions="scalar",
+    defaultval=1,
+    mnemonics="OPTICS TYPE",
+    added_in_version="9.7.1",
+    text=r"""
+
+
+1: Linear optics
+2: Two phonon absorption
+""",
+),
+
 
 ]

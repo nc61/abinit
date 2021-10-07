@@ -418,6 +418,7 @@ type, public :: dataset_type
  integer :: optstress
  integer :: orbmag
  integer :: ortalg
+ integer :: optx_type = 1
 !P
  integer :: paral_atom
  integer :: paral_kgb
@@ -751,7 +752,7 @@ type, public :: dataset_type
  real(dp) :: ne_qFD = zero ! CP added
  real(dp) :: nh_qFD = zero  ! CP added
  real(dp) :: noseinert
- real(dp) :: nqfd = zero 
+ real(dp) :: nqfd = zero
  real(dp) :: omegasimax = 50/Ha_eV
  real(dp) :: omegasrdmax = 1.0_dp/Ha_eV  ! = 1eV
  real(dp) :: pawecutdg
@@ -974,7 +975,7 @@ CONTAINS  !=====================================================================
 !! INPUTS
 !!  dtset <type(dataset_type)>=all input variables in this dataset
 !!   | cellcharge(nimage)=number of electrons missing (+) or added (-) to system (usually 0)
-!!   |  might depend on the image, but only with occopt=2 
+!!   |  might depend on the image, but only with occopt=2
 !!   | iscf= if>0, SCF calculation ; if<=0, non SCF calculation (wtk might
 !!   |  not be defined)
 !!   | natom=number of atoms in unit cell
@@ -1092,7 +1093,7 @@ subroutine dtset_initocc_chkneu(dtset, nelectjell, occopt)
 &           dtset%nelect-dtset%nh_qFD, '. Increase ivalence. '
             ABI_ERROR(msg)
           end if
-       
+
        if (dtset%ivalence*dtset%nsppol > nocc) tmpocc(nocc+1:dtset%ivalence*dtset%nsppol)=0.0_dp
        ! now do it for excited electrons in the conduction bands > ivalence
        nocc   = (dtset%ne_qFD-1.0d-8)/maxocc + 1
@@ -1722,6 +1723,7 @@ type(dataset_type) function dtset_copy(dtin) result(dtout)
  dtout%optstress          = dtin%optstress
  dtout%orbmag             = dtin%orbmag
  dtout%ortalg             = dtin%ortalg
+ dtout%optx_type          = dtin%optx_type
  dtout%paral_atom         = dtin%paral_atom
  dtout%paral_kgb          = dtin%paral_kgb
  dtout%paral_rf           = dtin%paral_rf
@@ -3263,6 +3265,7 @@ subroutine chkvars(string)
  list_vars=trim(list_vars)//' objbrf objaro objbro objatr objbtr occ'
  list_vars=trim(list_vars)//' occopt omegasimax omegasrdmax optcell optdriver optforces'
  list_vars=trim(list_vars)//' optnlxccc optstress orbmag ortalg'
+ list_vars=trim(list_vars)//' optx_type'
  list_vars=trim(list_vars)//' opt_effpot opt_ncoeff opt_coeff output_file outdata_prefix'
 !P
  list_vars=trim(list_vars)//' papiopt paral_atom paral_kgb paral_rf pawcpxocc pawcross'

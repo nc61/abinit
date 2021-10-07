@@ -1265,7 +1265,7 @@ subroutine invars2(bravais,dtset,iout,jdtset,lenstr,mband,msym,npsp,string,usepa
      dtset%nband(ikpt)=nband1
    end do
 
-   ! CP added 
+   ! CP added
    if (occopt==9)then
 ! Read the valence band index
       call intagm(dprarr,intarr,jdtset,marr,1,string(1:lenstr),'ivalence',tread,'INT')
@@ -2534,6 +2534,8 @@ subroutine invars2(bravais,dtset,iout,jdtset,lenstr,mband,msym,npsp,string,usepa
  else if (dtset%wfoptalg>=10 .and. dtset%ortalg>0) then
    dtset%ortalg=-dtset%ortalg
  end if
+
+ call intagm(dprarr,intarr,jdtset,marr,1,string(1:lenstr),'optx_type',tread,'INT')
 
  ! Print variables
  call intagm(dprarr,intarr,jdtset,marr,natom,string(1:lenstr),'prtatlist',tread,'INT')

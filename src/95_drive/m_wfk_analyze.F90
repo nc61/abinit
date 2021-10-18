@@ -412,7 +412,7 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
 
        end if
    else
-     MSG_ERROR(sjoin("Invalid value of optx_type", itoa(dtset%optx_type)))
+     ABI_ERROR(sjoin("Invalid value of optx_type", itoa(dtset%optx_type)))
    end if
 
  !case ("paw_aeden")

@@ -118,7 +118,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
 
  ! local variables
  character(len=500) :: msg
- integer :: my_rank,nprocs,nfft,nfftf,mgfft,mgfftf,mband,mpw
+ integer :: my_rank,nprocs,nfft,nfftf,mgfft,mgfftf,mband,mpw,mpw_bzu
  integer :: natom,natom3,nsppol,nspinor,nspden,nkpt,n1,n2,n3,n4,n5,n6
  integer :: spin,ik,iq,sband,fband,nkibz,nkbz
  integer :: usevnl,optlocal,optnl,opt_gvnlx1,usecprj,sij_opt 
@@ -141,16 +141,16 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  real(dp) :: v_bks(2,3),kpt(3),kpt_ibz(3),qpt(3),kqpt(3),kptu(3)
  real(dp) :: ylmgr_dum(1,1,1)
  integer :: symq(4,2,cryst%nsym), g0_k(3),g0_kq(3),sym_k(6),sym_kq(6)
- integer :: work_ngfft(18),gmax(3)
+ integer :: work_ngfft(18),gmax(3),g0_umk(3)
 
  integer,allocatable :: nband(:,:),wfd_istwfk(:),bz2ibz(:,:),gtmp(:,:),kg_kq(:,:),kg_k(:,:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
- real(dp),allocatable :: ph1d(:,:),cg_ket(:,:),cg_bra(:,:)
+ real(dp),allocatable :: ph1d(:,:),cg_ket(:,:),cg_bra(:,:),ket_k(:,:),ket_kq(:,:)
  real(dp),allocatable :: wtk(:), kibz(:,:), kbz(:,:)
  real(dp),allocatable :: grad_berry(:,:),vtrial(:,:),vlocal(:,:,:,:),h1kets_kq(:,:,:,:),vlocal1(:,:,:,:,:)
  real(dp),allocatable :: v1scf(:,:,:,:),ffnlk(:,:,:,:),kpg1_k(:,:),kpg_k(:,:),ffnl1(:,:,:,:)
  real(dp),allocatable :: ylm_kq(:,:),ylm_k(:,:),ylmgr_kq(:,:,:),ph3d(:,:,:),ph3d1(:,:,:) 
- real(dp),allocatable :: kinpw1(:),dkinpw(:),cgwork(:,:)
+ real(dp),allocatable :: kinpw1(:),dkinpw(:),cgwork(:,:),cgwork_kq(:,:),work_cfft(:,:,:,:)
  complex(dpc),allocatable :: vmat(:,:,:,:,:)
 
  if (psps%usepaw == 1) then
@@ -300,7 +300,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ABI_MALLOC(ylmgr_kq, (mpw, 3, psps%mpsang**2 * psps%useylm * useylmgr1))
 
  ! mpw is the maximum number of plane-waves over k and k+q where k and k+q are in the BZ.
- max_umklapp = 10 
+ max_umklapp = 2 
  
  do ik=1,nkbz
    kpt = kbz(:, ik)
@@ -310,7 +310,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
          kptu = kpt + one*[i1, i2, i3]
          ! TODO: g0 umklapp here can enter into play gmax may not be large enough!
          call get_kg(kptu, istwfk1, 1.1_dp * ecut, cryst%gmet, onpw, gtmp)
-         mpw = max(mpw, onpw)
+         mpw_bzu = max(mpw_bzu, onpw)
          call wrtout(std_out, sjoin("npw trial",itoa(onpw)))
          do ipw=1,onpw
            do ii=1,3
@@ -322,11 +322,15 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
      end do
    end do
  end do
- call wrtout(std_out,sjoin("New mpw:", itoa(mpw)))
+ call wrtout(std_out,sjoin("New mpw_bzu:", itoa(mpw_bzu)))
+
+ ABI_CALLOC(ket_k, (2, mpw_bzu*ebands%nspinor))
+ ABI_CALLOC(ket_kq, (2, mpw_bzu*ebands%nspinor))
 
 !! Init work_ngfft
-!call ngfft_seq(work_ngfft, gmax)
-!if (verbose) call wrtout(std_out,sjoin("work_ngfft:", ltoa(work_ngfft)))
+ call ngfft_seq(work_ngfft, gmax)
+ if (verbose) call wrtout(std_out,sjoin("work_ngfft:", ltoa(work_ngfft)))
+ ABI_MALLOC(work_cfft, (2,work_ngfft(4),work_ngfft(5),work_ngfft(6)))
  
  ! Loop over q in full BZ
  do iq=1,nkbz
@@ -359,7 +363,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
        kpt = kbz(:,ik)
        kqpt = kpt + qpt
        ! Find the index of the k+q point
-       call findqg0(ikq, g0_kq, kqpt, nkbz, kbz, [1,1,1])
+       call findqg0(ikq, g0_umk, kqpt, nkbz, kbz, [1,1,1])
        if (verbose) call wrtout(std_out, sjoin("MSG: Treating transitions from kpt", ktoa(kpt), "to k+q", ktoa(kqpt), "connected by qpt", ktoa(qpt)))
 
        ! Get the symmetry information mapping the k point to the IBZ
@@ -420,8 +424,6 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
          ABI_FREE(gtmp)
        end if
 
-       ! Allocate cgwork to read in cg at irreducible k
-       ABI_MALLOC(cgwork, (2, npw_k*nspinor))
 
 
        ABI_MALLOC_OR_DIE(vlocal1, (cplex*n4, n5, n6, gs_hamkq%nvloc, my_npert), ierr)     
@@ -453,22 +455,39 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
          npw_kq, psps%ntypat, psps%pspso, psps%qgrid_ff, cryst%rmet, psps%usepaw, psps%useylm, ylm_kq, ylmgr_kq, &
          comm=comm)
 
+       ! Allocate cgwork to read in cg at irreducible k
+       ABI_MALLOC(cgwork, (2, npw_k*nspinor))
+       ABI_MALLOC(cgwork_kq, (2, npw_kq*nspinor))
        do iband=1,mband
          ! Symmetrize k wavefunctions in the BZ from IBZ (if needed).
          if (isirr_k) then
            if (verbose) call wrtout(std_out, sjoin("Copying cg for irreducible k point",itoa(ik_ibz)))
            ! Copy u_kq(G)
-           !call wfd%copy_cg(iband, ik_ibz, spin, ket_k)
+             call wfd%copy_cg(iband, ik_ibz, spin, ket_k)
          else
            ! Reconstruct u_kq(G) from the IBZ image.
            ! Use cgwork as workspace array, results stored in 
            if (verbose) call wrtout(std_out, sjoin("band", itoa(iband), "ik_ikbz", itoa(ik_ibz), "spin", itoa(spin)))
            call wfd%copy_cg(iband, ik_ibz, spin, cgwork)
-          !call cgtk_rotate(cryst, kpt_ibz, isym_k, trev_k, g0_k, nspinor, ndat1, &
-          !                 npw_kibz, wfd%kdata(ik_ibz)%kg_k, &
-          !                 npw_k, kg_k, istwf_kibz, istwf_k, cgwork, ket_k, work_ngfft, work)
+           call cgtk_rotate(cryst, kpt_ibz, isym_k, trev_k, g0_k, nspinor, ndat1, &
+                            npw_kibz, wfd%kdata(ik_ibz)%kg_k, &
+                            npw_k, kg_k, istwf_kibz, istwf_k, cgwork, ket_k, work_ngfft, work_cfft)
          end if
          
+         ! Symmetrize k wavefunctions in the BZ from IBZ (if needed).
+         if (isirr_kq) then
+           if (verbose) call wrtout(std_out, sjoin("Copying cg for irreducible k point",itoa(ikq_ibz)))
+           ! Copy u_kq(G)
+             call wfd%copy_cg(iband, ikq_ibz, spin, ket_kq)
+         else
+           ! Reconstruct u_kq(G) from the IBZ image.
+           ! Use cgwork as workspace array, results stored in 
+           if (verbose) call wrtout(std_out, sjoin("band", itoa(iband), "ikq_ikbz", itoa(ikq_ibz), "spin", itoa(spin)))
+           call wfd%copy_cg(iband, ikq_ibz, spin, cgwork_kq)
+           call cgtk_rotate(cryst, kqpt, isym_kq, trev_kq, g0_kq+g0_umk, nspinor, ndat1, &
+                            npw_kqibz, wfd%kdata(ikq_ibz)%kg_k, &
+                            npw_kq, kg_kq, istwf_kqibz, istwf_kq, cgwork, ket_kq, work_ngfft, work_cfft)
+         end if
        end do !iband
 
        ! Loop over all 3*natom perturbations (Each CPU prepares its own potentials)
@@ -513,6 +532,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
        ABI_FREE(kpg_k)
        ABI_FREE(vlocal1)
        ABI_FREE(cgwork)
+       ABI_FREE(cgwork_kq)
      end do !spin
    end do !ik
  end do !iq
@@ -529,6 +549,9 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ABI_FREE(ylm_k)
  ABI_FREE(ylm_kq)
  ABI_FREE(ylmgr_kq)
+ ABI_FREE(ket_k)
+ ABI_FREE(ket_kq)
+ ABI_FREE(work_cfft)
 
  end subroutine indabs
 

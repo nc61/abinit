@@ -140,13 +140,13 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ! arrays
  real(dp) :: v_bks(2,3),kpt(3),kpt_ibz(3),qpt(3),kqpt(3),kptu(3)
  real(dp) :: ylmgr_dum(1,1,1)
- integer :: symq(4,2,cryst%nsym), g0_k(3),g0_kq(3),sym_k(6),sym_kq(6)
+ integer :: symq(4,2,cryst%nsym),g0_k(3),g0_kq(3),sym_k(6),sym_kq(6)
  integer :: work_ngfft(18),gmax(3),g0_umk(3)
 
  integer,allocatable :: nband(:,:),wfd_istwfk(:),bz2ibz(:,:),gtmp(:,:),kg_kq(:,:),kg_k(:,:)
  logical,allocatable :: bks_mask(:,:,:),keep_ur(:,:,:)
  real(dp),allocatable :: ph1d(:,:),cg_ket(:,:),cg_bra(:,:),ket_k(:,:),ket_kq(:,:)
- real(dp),allocatable :: wtk(:), kibz(:,:), kbz(:,:)
+ real(dp),allocatable :: wtk(:),kibz(:,:),kbz(:,:)
  real(dp),allocatable :: grad_berry(:,:),vtrial(:,:),vlocal(:,:,:,:),h1kets_kq(:,:,:,:),vlocal1(:,:,:,:,:)
  real(dp),allocatable :: v1scf(:,:,:,:),ffnlk(:,:,:,:),kpg1_k(:,:),kpg_k(:,:),ffnl1(:,:,:,:)
  real(dp),allocatable :: ylm_kq(:,:),ylm_k(:,:),ylmgr_kq(:,:,:),ph3d(:,:,:),ph3d1(:,:,:) 
@@ -165,19 +165,17 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  natom = cryst%natom; natom3 = 3 * natom; nsppol = ebands%nsppol; nspinor = ebands%nspinor
  nspden = dtset%nspden; nkpt = ebands%nkpt
 
- ! FFT meshes from input file (not necessarly equal to the ones found in the external files.
+ ! FFT meshes from input file 
  nfftf = product(ngfftf(1:3)); mgfftf = maxval(ngfftf(1:3))
  nfft = product(ngfft(1:3)) ; mgfft = maxval(ngfft(1:3))
  n1 = ngfft(1); n2 = ngfft(2); n3 = ngfft(3)
  n4 = ngfft(4); n5 = ngfft(5); n6 = ngfft(6)
  call wrtout(std_out, sjoin("FFT grid:", ltoa(ngfft)))
  
-
  ! For now no parallelism over perturbations. Each processor handles all perturbations
  my_npert = natom3
 
- ! Construct object to store final results.
- ecut = dtset%ecut ! dtset%dilatmx
+ ecut = dtset%ecut 
 
  mband = dtset%mband
 
@@ -204,17 +202,20 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
 
 
  mpw = maxval(wfd%npwarr)
+
+ !TODO: Put in debugging switch to turn these messages on or off
  call wrtout(std_out,sjoin("mpw:", itoa(mpw)))
  call wrtout(std_out,sjoin("Npw for all k points",ltoa(wfd%npwarr)))
  call wrtout(std_out,sjoin("istwfk for all k points",ltoa(wfd%istwfk)))
- print *, "gmet", cryst%gmet
+
  ABI_MALLOC(vmat, (3,mband,mband,nkpt,nsppol))
  ddkop = ddkop_new(dtset, cryst, pawtab, psps, wfd%mpi_enreg, mpw, wfd%ngfft)
 
  ABI_CALLOC(cg_ket, (2, mpw*ebands%nspinor))
  ABI_CALLOC(cg_bra, (2, mpw*ebands%nspinor))
 
-
+ ! Compute the optical matrix elements
+ ! TODO: reuse code from m_nlo?
  do spin = 1,nsppol   
    do ik = 1,nkpt
      npw_k = wfd%npwarr(ik); istwf_k = wfd%istwfk(ik)
@@ -236,7 +237,6 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
    end do !ik
  end do !spin
  
-
  ! if PAW, one has to solve a generalized eigenproblem
  ! BE careful here because I will need sij_opt == -1
  usecprj = 0
@@ -290,7 +290,6 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ABI_MALLOC(v1scf, (cplex, nfftf, nspden, dvdb%my_npert))
  call wrtout(std_out, sjoin("MSG: nkpt", itoa(nkbz)))
 
-
  ABI_MALLOC(kg_k, (3,mpw))
  ABI_MALLOC(kg_kq, (3,mpw))
  ! Spherical Harmonics for useylm == 1.
@@ -299,7 +298,7 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
  ! TODO: useylmgr1 has value 0 but the name implies it should be 1
  ABI_MALLOC(ylmgr_kq, (mpw, 3, psps%mpsang**2 * psps%useylm * useylmgr1))
 
- ! mpw is the maximum number of plane-waves over k and k+q where k and k+q are in the BZ.
+ ! TODO: More elegant handling of FFT box for Umklapp
  max_umklapp = 2 
  
  do ik=1,nkbz
@@ -423,8 +422,6 @@ subroutine indabs(wfk0_path,dtfil,ngfft,ngfftf,dtset,cryst,ebands,dvdb,ifc,&
          kg_kq(:,1:npw_kq) = gtmp(:,:npw_kq)
          ABI_FREE(gtmp)
        end if
-
-
 
        ABI_MALLOC_OR_DIE(vlocal1, (cplex*n4, n5, n6, gs_hamkq%nvloc, my_npert), ierr)     
 

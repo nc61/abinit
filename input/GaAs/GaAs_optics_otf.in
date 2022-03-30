@@ -8,11 +8,14 @@ occopt 1      # Fermi-Dirac occupation function
 # Definition of the meshes
 nshiftk 1
 shiftk 0.0 0.0 0.0
-ngkpt 8 8 8 
-kptopt 3 
-nband 12 
+ngkpt 16 16 16 
+kptopt 1 
+nband 8 
 nspinor 1
 
+optx_type 1
+nfreqsp 100
+freqremax 1
 
 getwfk_filepath "GaAs_otfo_DS3_WFK"  # Read the dense WFK file
 

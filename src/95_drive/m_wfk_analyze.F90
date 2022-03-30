@@ -396,7 +396,9 @@ subroutine wfk_analyze(acell, codvsn, dtfil, dtset, pawang, pawrad, pawtab, psps
    ABI_FREE(paw_onsite)
 
  case (WFK_TASK_OPTICS)
+   call wrtout(std_out, "Computing optical properties")
    if (dtset%optx_type == 1) then
+     call wrtout(std_out, "Computing linear optical properties")
      !TODO: freqremax, freqremin, nfreqsp, opt_forces, freqspmax
      call linopt_coefs(1, 0, cryst, ebands, "GaAs", ngfftc, dtset%nfreqsp, pawtab, [(one,zero), (zero,zero), (zero,zero)], dtset%dfpt_sciss, dtset%freqremax, comm, dtset, psps, wfk0_path)
    else if (dtset%optx_type == 2) then

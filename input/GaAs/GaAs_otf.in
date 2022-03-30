@@ -42,7 +42,7 @@ kptbounds4  0.5  0.0  0.0 # L point
 tolwfr4  1.0d-12
 enunit4  1         
 # Data common to datasets 2-6
-  nband  6     # This number of bands might be too low for non-linear optics and real part of linear optics
+  nband  8     # This number of bands might be too low for non-linear optics and real part of linear optics
 
 # Data common to datasets 3-6
  kptopt   1      # Need points in the full BZ for non-linear optical properties
@@ -59,7 +59,7 @@ enunit4  1
 #Data common to all datasets
  nshiftk 1
  shiftk  0.0 0.0 0.0
- ngkpt 24 24 24       # This is much too low : should be at least 24x24x24
+ ngkpt 16 16 16       # This is much too low : should be at least 24x24x24
    qpt  0.0 0.0 0.0     # Not really needed, because it is the defaults, but mentioned here to keep track of its importance for datasets 4-6
 
  acell   3*10.60
